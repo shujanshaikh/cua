@@ -86,6 +86,48 @@ pub fn membership(window_id: u32) -> Result<Vec<u64>, String> {
         .ok_or_else(|| "workspace_state_unavailable: window membership is unknown".into())
 }
 
+/// Query one desktop directly, including minimized windows. The options and
+/// signature follow yabai's space_window_list_for_connection (MIT). No titles
+/// or application content are inspected.
+pub fn space_window_ids(space: u64) -> Result<Vec<u32>, String> {
+    type Copy =
+        unsafe extern "C" fn(u32, u32, *const c_void, u32, *mut u64, *mut u64) -> *const c_void;
+    let copy: Copy = unsafe { symbol(b"SLSCopyWindowsWithOptionsAndTags\0")? };
+    let spaces = CFArray::from_CFTypes(&[CFNumber::from(space as i64)]);
+    let mut set = 0;
+    let mut clear = 0;
+    let raw = unsafe {
+        copy(
+            connection()?,
+            0,
+            spaces.as_concrete_TypeRef().cast(),
+            0x7,
+            &mut set,
+            &mut clear,
+        )
+    };
+    if raw.is_null() {
+        return Err("workspace_state_unavailable: Space window query returned null".into());
+    }
+    let value = unsafe { CFType::wrap_under_create_rule(raw) };
+    let array = value
+        .downcast::<CFArray>()
+        .ok_or("workspace_state_unavailable: Space window query is not an array")?;
+    array
+        .iter()
+        .map(|item| {
+            let number = unsafe { CFType::wrap_under_get_rule(*item) }
+                .downcast::<CFNumber>()
+                .ok_or("workspace_state_unavailable: invalid Space window entry")?;
+            number
+                .to_i64()
+                .and_then(|id| u32::try_from(id).ok())
+                .filter(|id| *id != 0)
+                .ok_or_else(|| "workspace_state_unavailable: invalid Space window id".into())
+        })
+        .collect()
+}
+
 /// Attempt creation without activating the Space. A raw, unmanaged server
 /// Space is not a Mission Control desktop and must never be reported as one.
 pub fn create() -> Result<u64, String> {

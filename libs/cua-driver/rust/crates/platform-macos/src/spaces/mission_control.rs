@@ -202,8 +202,8 @@ pub(super) fn delete(space: u64) -> Result<(), String> {
 }
 
 fn ensure_empty(space: u64) -> Result<(), String> {
-    for window in crate::windows::all_windows_any_layer() {
-        if membership(window.window_id)?.contains(&space) {
+    for window in space_window_ids(space)? {
+        if !crate::windows::is_desktop_background(window)? {
             return Err(
                 "workspace_not_empty: restore or move windows before explicit deletion".into(),
             );

@@ -8,6 +8,24 @@ fn main() {
         "display_ids={:?}",
         core_graphics::display::CGDisplay::active_displays()
     );
+    if let Some(index) = args.iter().position(|arg| arg == "--space-windows") {
+        for id in
+            platform_macos::spaces::space_window_ids(args[index + 1].parse().unwrap()).unwrap()
+        {
+            println!(
+                "space_window_metadata={:?}",
+                platform_macos::windows::window_info_by_id(id).map(|w| (
+                    w.window_id,
+                    w.pid,
+                    w.layer
+                ))
+            );
+        }
+        println!(
+            "space_windows={:?}",
+            platform_macos::spaces::space_window_ids(args[index + 1].parse().unwrap())
+        );
+    }
     println!("before={:?}", platform_macos::spaces::managed_displays());
     if args.iter().any(|arg| arg == "--mission-control-create") {
         println!(

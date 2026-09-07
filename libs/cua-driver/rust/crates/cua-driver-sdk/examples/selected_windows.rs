@@ -124,6 +124,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             assert!(!moved.is_error, "{}", moved.text);
             assert_eq!(structured(&moved)["active"], false);
         }
+        #[cfg(target_os = "macos")]
+        {
+            let space = structured(&created)["space_id"].as_u64().unwrap();
+            let members = platform_macos::spaces::space_window_ids(space)?;
+            for window in windows.iter().take(2) {
+                assert!(members.contains(&(window["window_id"].as_u64().unwrap() as u32)));
+            }
+            let occupied = session
+                .call_tool("delete_workspace".into(), "{}".into())
+                .await?;
+            assert!(occupied.is_error, "occupied workspace must not be deleted");
+            println!(
+                "exact_space_query_includes_fixture_windows_and_occupied_deletion_refused=true"
+            );
+        }
         println!("workspace_created_and_two_windows_moved_without_switch=true");
     }
     let frames = Arc::new(AtomicUsize::new(0));

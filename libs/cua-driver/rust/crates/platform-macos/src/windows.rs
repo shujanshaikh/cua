@@ -94,8 +94,28 @@ pub(crate) fn visible_windows_with_space_snapshot() -> WindowEnumeration {
 /// layer filter on enumeration and off identity lookup is what lets
 /// `get_window_state` tell "no such window" apart from "exists, but is not a
 /// layer-0 window" (issue #2237).
-pub(crate) fn all_windows_any_layer() -> Vec<WindowInfo> {
+fn all_windows_any_layer() -> Vec<WindowInfo> {
     enumerate_windows(kCGWindowListExcludeDesktopElements, LayerFilter::AnyLayer).windows
+}
+
+/// Identify only negative-layer backgrounds that Quartz itself removes with
+/// ExcludeDesktopElements. Missing metadata is not proof of an empty desktop.
+pub(crate) fn is_desktop_background(window_id: u32) -> Result<bool, String> {
+    let all = enumerate_windows(0, LayerFilter::AnyLayer);
+    let window = all
+        .windows
+        .iter()
+        .find(|w| w.window_id == window_id)
+        .ok_or("workspace_state_unavailable: desktop member metadata unavailable")?;
+    if window.layer >= 0 {
+        return Ok(false);
+    }
+    let applications = all_windows_any_layer();
+    // An empty second enumeration could be a failed WindowServer query.
+    if applications.is_empty() {
+        return Err("workspace_state_unavailable: application enumeration unavailable".into());
+    }
+    Ok(!applications.iter().any(|w| w.window_id == window_id))
 }
 
 /// Which CGWindow layers an enumeration admits.
