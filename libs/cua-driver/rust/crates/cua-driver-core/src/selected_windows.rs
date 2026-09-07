@@ -177,6 +177,7 @@ impl SelectedWindows {
             return Err("selected_window_background_required: desktop input is unavailable".into());
         }
         match tool {
+            "launch_app" if self.workspace.get().is_some() => Ok(()),
             "start_recording" if args.get("record_video").and_then(Value::as_bool) != Some(true) => Ok(()),
             "get_recording_state" | "stop_recording" => Ok(()),
             "get_browser_state" if args.get("target_id").is_none() => self.validate(Self::target(args)?),

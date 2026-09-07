@@ -53,6 +53,13 @@ pub struct LaunchedWorkspaceWindow {
 }
 
 pub trait WorkspaceBackend: Send + Sync {
+    /// Use the normal app launcher, returning only an attested new window.
+    fn launch_app(&self, _args: &Value) -> Result<(LaunchedWorkspaceWindow, Value), String> {
+        Err(
+            "workspace_operation_unsupported: normal app launch is unavailable on this platform"
+                .into(),
+        )
+    }
     fn launch(&self, _recipe: &WorkspaceApplication) -> Result<LaunchedWorkspaceWindow, String> {
         Err("workspace_operation_unsupported: isolated workspace app launch is unavailable".into())
     }
@@ -102,12 +109,59 @@ struct Workspace {
     launch_failures: HashMap<String, String>,
 }
 
-struct Workspaces {
+pub(crate) struct Workspaces {
     backend: Arc<dyn WorkspaceBackend>,
     owned: Mutex<HashMap<String, Workspace>>,
 }
 
 impl Workspaces {
+    pub(crate) async fn launch_app(self: &Arc<Self>, args: Value) -> ToolResult {
+        let workspaces = self.clone();
+        let outcome = crate::tool::spawn_blocking_with_authorization(move || {
+            let context = crate::tool::current_dispatch_authorization_context()
+                .ok_or("workspace_requires_trusted_session")?;
+            if !context.capability_manifest().is_some_and(|m| m.workspace_launch_apps()) {
+                return Err("workspace_app_denied: normal app launching is not enabled by the host".to_owned());
+            }
+            let selection = context.selected_windows()?.ok_or("workspace_requires_selected_windows")?;
+            let session = args.get("session").or_else(|| args.get("_session_id"))
+                .and_then(Value::as_str).ok_or("workspace_session_required")?;
+            let mut owned = workspaces.owned.lock().unwrap_or_else(|e| e.into_inner());
+            let workspace = owned.get_mut(session).ok_or("workspace_not_found: create a workspace before launching apps")?;
+            if !workspaces.backend.state(workspace.space)?.0 {
+                return Err("workspace_space_deleted: cannot launch into a missing workspace".into());
+            }
+            let (launched, mut data) = workspaces.backend.launch_app(&args)?;
+            if context.is_revoked() || context.is_expired() {
+                return Err("authorization_revoked: launch completed after session ended; no window access granted".into());
+            }
+            let target = launched.target;
+            selection.admit_launched_window(target, launched.identity)?;
+            // Retain the target before moving it so a failed move is recoverable.
+            workspace.moved.insert(target, vec![]);
+            let origin = workspaces.backend.membership(target)?;
+            if origin.len() != 1 {
+                return Err("workspace_launch_incomplete: ambiguous initial membership; query get_workspace_state for recovery".into());
+            }
+            workspace.moved.insert(target, origin);
+            workspaces.backend.move_window(target, workspace.space)?;
+            selection.validate(target)?;
+            data["window_id"] = json!(target.window_id);
+            data["workspace_space_id"] = json!(workspace.space);
+            // The native launcher may report other windows; never advertise them as admitted.
+            if let Some(windows) = data.get_mut("windows").and_then(Value::as_array_mut) {
+                windows.retain(|w| w.get("window_id").and_then(Value::as_u64) == Some(target.window_id));
+            }
+            Ok::<_, String>(data)
+        }).await;
+        match outcome {
+            Ok(Ok(data)) => ToolResult::text("Application launched in the session workspace.")
+                .with_structured(data),
+            Ok(Err(error)) => ToolResult::error(error),
+            Err(error) => ToolResult::error(format!("workspace_worker_failed: {error}")),
+        }
+    }
+
     fn snapshot(
         &self,
         workspace: Option<&Workspace>,
@@ -454,7 +508,14 @@ impl Tool for WorkspaceTool {
                 if let Some(app) = launched_app {
                     structured["launched_app"] = app;
                 }
-                ToolResult::text("Workspace state verified.").with_structured(structured)
+                {
+                    let generic = crate::tool::current_dispatch_authorization_context()
+                        .and_then(|c| c.capability_manifest().map(|m| m.workspace_launch_apps()))
+                        .unwrap_or(false);
+                    ToolResult::text(if generic {
+                        "Workspace state verified. Use list_apps and launch_app with any installed app name or bundle_id. available_apps contains optional legacy aliases, not an app allowlist."
+                    } else { "Workspace state verified." }).with_structured(structured)
+                }
             }
             Err(message) => {
                 let mut structured = json!({"code":message.split(':').next().unwrap_or("workspace_failed"), "message":message});
@@ -476,6 +537,7 @@ pub fn register(registry: &mut ToolRegistry, backend: Option<Arc<dyn WorkspaceBa
         backend: backend.unwrap_or_else(|| Arc::new(Unsupported)),
         owned: Mutex::default(),
     });
+    registry.workspaces = Some(workspaces.clone());
     let weak = Arc::downgrade(&workspaces);
     registry.retain_session_end_hook(crate::session::register_scoped_session_end_hook(
         move |session| {
@@ -566,6 +628,19 @@ mod tests {
         }
     }
     impl WorkspaceBackend for Native {
+        fn launch_app(&self, args: &Value) -> Result<(LaunchedWorkspaceWindow, Value), String> {
+            assert_eq!(args["name"], "Zed");
+            assert_eq!(args["urls"], json!(["/project"]));
+            let window = self.launch(&WorkspaceApplication {
+                bundle_id: "dev.zed.Zed".into(),
+                arguments: vec![],
+                urls: vec![],
+            })?;
+            Ok((
+                window,
+                json!({"pid":50,"name":"Zed","bundle_id":"dev.zed.Zed","windows":[{"window_id":51},{"window_id":999}]}),
+            ))
+        }
         fn launch(&self, _: &WorkspaceApplication) -> Result<LaunchedWorkspaceWindow, String> {
             self.launch_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -623,8 +698,8 @@ mod tests {
     ) -> Arc<EffectiveAuthorizationContext> {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), serde_json::to_vec(&json!({
-            "version":3,"resources":{"apps":[{"bundle_id":"com.test.app","launch":true}],"desktop":{"workspace_applications":{"notes":{"bundle_id":"com.test.app"}},"selected_windows_only":true,"workspace_only":true,"windows":windows,"workspace_space_id":100}},
-            "allow":{"tools":["launch_workspace_app","create_workspace","get_workspace_state","move_window_to_workspace","reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace","end_session","list_windows"]}
+            "version":3,"resources":{"apps":[{"bundle_id":"com.test.app","launch":true}],"desktop":{"workspace_launch_apps":true,"workspace_applications":{"notes":{"bundle_id":"com.test.app"}},"selected_windows_only":true,"workspace_only":true,"windows":windows,"workspace_space_id":100}},
+            "allow":{"tools":["launch_app","list_apps","launch_workspace_app","create_workspace","get_workspace_state","move_window_to_workspace","reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace","end_session","list_windows"]}
         })).unwrap()).unwrap();
         let manifest = Arc::new(crate::session_manifest::load_manifest(file.path()).unwrap());
         let (host, connection) = registry.trusted_in_process_binding();
@@ -645,6 +720,99 @@ mod tests {
         registry
             .resolve_delegated(&connection, session, &format!("transport-{session}"))
             .unwrap()
+    }
+
+    struct NormalLaunch;
+    #[async_trait]
+    impl Tool for NormalLaunch {
+        fn def(&self) -> &ToolDef {
+            static DEF: std::sync::LazyLock<ToolDef> = std::sync::LazyLock::new(|| ToolDef {
+                name: "launch_app".into(),
+                description: "Normal launcher".into(),
+                input_schema: json!({"type":"object","properties":{"name":{"type":"string"},"urls":{"type":"array","items":{"type":"string"}}}}),
+                read_only: false,
+                destructive: false,
+                idempotent: false,
+                open_world: true,
+            });
+            &DEF
+        }
+        async fn invoke(&self, _: Value) -> ToolResult {
+            panic!("workspace launch must never reach the unscoped launcher")
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_launch_routes_to_workspace_and_checks_membership() {
+        let native = Arc::new(Native::default());
+        let auth = SessionAuthorizationRegistry::with_ceiling(
+            SessionModeCeiling::for_trusted_sessions(
+                [PermissionMode::Standard],
+                false,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
+        let selected = context(&auth, "normal", &[]);
+        let other = context(&auth, "other-normal", &[]);
+        let mut tools = ToolRegistry::new();
+        tools.set_window_selection_backend(native.clone());
+        tools.set_workspace_backend(native.clone());
+        tools.register(Box::new(NormalLaunch));
+        tools.register_session_tools();
+        tools.bind_selected_windows(&selected).unwrap();
+        tools.bind_selected_windows(&other).unwrap();
+        let args = json!({"session":"normal","name":"Zed","urls":["/project"]});
+        let early = tools
+            .invoke_with_context("launch_app", args.clone(), selected.clone())
+            .await;
+        assert_eq!(early.is_error, Some(true));
+        assert_eq!(
+            native
+                .launch_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        let created = tools
+            .invoke_with_context(
+                "create_workspace",
+                json!({"session":"normal"}),
+                selected.clone(),
+            )
+            .await;
+        assert_ne!(created.is_error, Some(true), "{created:?}");
+        let result = tools
+            .invoke_with_context("launch_app", args.clone(), selected.clone())
+            .await;
+        assert_ne!(result.is_error, Some(true), "{result:?}");
+        let data = result.structured_content.unwrap();
+        assert_eq!(data["windows"], json!([{"window_id":51}]));
+        assert_eq!(data["workspace_space_id"], 100);
+        let target = WindowTarget {
+            pid: 50,
+            window_id: 51,
+        };
+        assert!(selected
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(target)
+            .is_ok());
+        assert!(other
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(target)
+            .is_err());
+        native.membership.lock().unwrap().insert(target, vec![1]);
+        native
+            .move_noop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let failed = tools
+            .invoke_with_context("launch_app", args, selected)
+            .await;
+        assert_eq!(failed.is_error, Some(true));
     }
 
     #[tokio::test]

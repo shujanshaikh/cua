@@ -655,6 +655,7 @@ impl TrustedInvocationEvidence {
 pub struct ToolRegistry {
     selection_backend: Option<Arc<dyn crate::selected_windows::WindowSelectionBackend>>,
     workspace_backend: Option<Arc<dyn crate::workspace::WorkspaceBackend>>,
+    pub(crate) workspaces: Option<Arc<crate::workspace::Workspaces>>,
     tools: HashMap<String, Box<dyn Tool>>,
     /// Ordered list of tool names for `tools/list`.
     order: Vec<String>,
@@ -766,6 +767,7 @@ impl ToolRegistry {
         Self {
             selection_backend: None,
             workspace_backend: None,
+            workspaces: None,
             tools: HashMap::new(),
             order: Vec::new(),
             recording,
@@ -1711,7 +1713,21 @@ impl ToolRegistry {
                 return protected_refusal("selected_window_stale", &error);
             }
         }
-        let mut result = tool.invoke(args.clone()).await;
+        let mut result = if resolved_name == "launch_app"
+            && context
+                .capability_manifest()
+                .is_some_and(|m| m.workspace_only())
+        {
+            match &self.workspaces {
+                Some(workspaces) => workspaces.launch_app(args.clone()).await,
+                None => protected_refusal(
+                    "workspace_operation_unsupported",
+                    "workspace app launch is unavailable on this platform",
+                ),
+            }
+        } else {
+            tool.invoke(args.clone()).await
+        };
         if context.is_revoked() || context.is_expired() {
             result = protected_refusal(
                 "authorization_revoked",
@@ -1725,7 +1741,11 @@ impl ToolRegistry {
         }
         if let Some(selection) = selection {
             if result.is_error != Some(true)
-                && matches!(resolved_name, "list_windows" | "list_apps")
+                && (resolved_name == "list_windows"
+                    || (resolved_name == "list_apps"
+                        && !context
+                            .capability_manifest()
+                            .is_some_and(|m| m.workspace_launch_apps())))
             {
                 let targets = selection.live_targets();
                 let key = if resolved_name == "list_windows" {

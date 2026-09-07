@@ -269,6 +269,21 @@ fn refusal(code: BrowserRefusalCode, message: impl Into<String>) -> BrowserRefus
     BrowserRefusal::new(code, message)
 }
 
+/// Only standalone Chromium products receive an isolated workspace profile.
+pub(crate) fn workspace_chromium(bundle_id: &str) -> bool {
+    bundle_id.eq_ignore_ascii_case("net.imput.helium")
+        || matches!(
+            browser_product("", bundle_id),
+            BrowserProduct::GoogleChrome
+                | BrowserProduct::MicrosoftEdge
+                | BrowserProduct::Chromium
+                | BrowserProduct::Brave
+                | BrowserProduct::Vivaldi
+                | BrowserProduct::Opera
+                | BrowserProduct::Arc
+        )
+}
+
 fn is_chromium(name: &str, bundle_id: &str) -> bool {
     let value = format!("{name} {bundle_id}").to_ascii_lowercase();
     let products = [
@@ -1665,6 +1680,15 @@ mod tests {
     fn lsof_parser_accepts_only_loopback_listeners() {
         let input = "n127.0.0.1:9222\nn*:9333\nn[::1]:9444\nn0.0.0.0:9555\n";
         assert_eq!(parse_loopback_lsof_ports(input), vec![9222, 9444]);
+    }
+
+    #[test]
+    fn workspace_profiles_only_apply_to_standalone_chromium() {
+        assert!(workspace_chromium("net.imput.helium"));
+        assert!(workspace_chromium("com.google.Chrome"));
+        assert!(!workspace_chromium("dev.zed.Zed"));
+        assert!(!workspace_chromium("com.microsoft.VSCode"));
+        assert!(!workspace_chromium("com.apple.Safari"));
     }
 
     #[test]

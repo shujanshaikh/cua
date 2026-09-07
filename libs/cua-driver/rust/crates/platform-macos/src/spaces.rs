@@ -303,6 +303,18 @@ pub fn move_window(window_id: u32, target: u64) -> Result<Vec<u64>, String> {
 /// The shared manager owns session state; this adapter owns only native calls.
 pub struct MacosWorkspaces;
 impl cua_driver_core::workspace::WorkspaceBackend for MacosWorkspaces {
+    fn launch_app(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<
+        (
+            cua_driver_core::workspace::LaunchedWorkspaceWindow,
+            serde_json::Value,
+        ),
+        String,
+    > {
+        launch::launch_app(args)
+    }
     fn launch(
         &self,
         recipe: &cua_driver_core::workspace::WorkspaceApplication,

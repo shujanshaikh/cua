@@ -22,11 +22,13 @@ are `mcp --socket <dedicated-socket>`. It does not use `--direct`. Register the
 printed command, arguments, and environment in your MCP client. The same command
 is `cua-driver workspace-config` when using a released build containing this feature.
 
-The manifest permits Helium, a second independent Helium window, and TextEdit.
-Review `manifest.json` before enabling the connection. This setup allows HTTP(S)
-browsing within the exact launched windows and briefly showing Mission Control
-when creating a Space. Add other trusted application recipes there before the
-daemon starts; applications still need to support inactive launch and input.
+The manifest enables ordinary `list_apps` discovery and `launch_app` for installed
+applications through `resources.desktop.workspace_launch_apps: true`. No app
+aliases or app-specific grants are required. Review `manifest.json` before enabling
+the connection. The setting requires version 3, selected-window isolation, and
+workspace-only access. It does not grant input to existing personal windows.
+This setup also allows HTTP(S) browsing within launched windows and briefly
+showing Mission Control when creating a Space.
 
 On macOS, the MCP proxy starts the normal installed app daemon, forwarding the
 configured permission mode and approved manifest. The daemon uses the installed
@@ -37,17 +39,41 @@ stop that daemon and reconnect after changing policy.
 
 ## Agent workflow
 
-Ask your agent to use `cua-driver`, create a workspace, launch `helium`,
-`helium-two`, and `notes`, and keep your current desktop active. All observations
-and input must use the exact PID/window ID returned for each app. Open tabs using
-the observed New Tab control, refresh `get_browser_state`, and navigate using
-the returned target and tab IDs. Both Helium processes have independent profiles.
+Create a workspace, then use ordinary app names or bundle IDs:
 
-Each alias launches once within an owned workspace. A new workspace gets a new
-browser profile through the trusted `{workspace}` argument placeholder, replaced
-by a driver-generated UUID. Retrying the same launch stays idempotent. Profile
-folders are retained after ending a session; cleanup never deletes user data.
-The example notes recipe opens its configured document, so its content persists.
+```json
+{"tool":"create_workspace","arguments":{"session":"my-work"}}
+{"tool":"launch_app","arguments":{"session":"my-work","name":"Zed","urls":["/absolute/path/to/project"]}}
+{"tool":"launch_app","arguments":{"session":"my-work","name":"Helium"}}
+{"tool":"launch_app","arguments":{"session":"my-work","name":"Helium"}}
+```
+
+The normal launcher resolves the app and accepts its usual open targets and
+arguments. Workspace mode forces a fresh process, verifies its identity and new
+window, moves that window, and verifies membership before returning success.
+The response keeps the normal app metadata and adds `window_id` and
+`workspace_space_id`. Only admitted windows appear in its `windows` list.
+All observations and input use the returned PID/window ID. `list_windows` remains
+workspace-filtered; `list_apps` includes installed apps so discovery works before
+launching. Keep the same session across follow-ups.
+
+Each `launch_app` call requests a new instance. Standalone Chromium browsers,
+including Helium, receive independent driver-created profiles and CDP endpoints.
+Agent-supplied profile/debugging flags are refused. Profiles are retained in the
+system temporary directory; session cleanup does not delete browsing data.
+Use browser target/tab IDs for subsequent tabs and navigation.
+
+Existing trusted `launch_workspace_app` recipes still work and remain idempotent.
+`available_apps` lists only these optional legacy aliases, not an app allowlist.
+New generated configurations have no aliases. A failed launch or move may leave
+a process or retained window; inspect `get_workspace_state` before retrying.
+
+Normal computer use is not equivalent to an isolated OS login. macOS Spaces
+share processes, menus, clipboard, and physical input. Apps that reuse an existing
+process, expose ambiguous windows, or require activation can refuse background
+workspace launch. Global desktop input, foreground menu invocation, and other
+operations without an exact-window boundary remain unavailable. These refusals
+protect the user's active desktop; enabling an app does not waive them.
 
 ## Lifetime
 

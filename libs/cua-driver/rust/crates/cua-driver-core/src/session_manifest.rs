@@ -49,6 +49,7 @@ pub struct SessionManifest {
     workspace_space_id: Option<u64>,
     workspace_allow_mission_control: bool,
     workspace_only: bool,
+    workspace_launch_apps: bool,
     workspace_display_id: Option<u32>,
     workspace_applications: HashMap<String, crate::workspace::WorkspaceApplication>,
     readable_paths: HashSet<String>,
@@ -103,6 +104,10 @@ impl SessionManifest {
 
     pub(crate) fn browser_selected_windows_only(&self) -> bool {
         self.browser_selected_windows_only
+    }
+
+    pub fn workspace_launch_apps(&self) -> bool {
+        self.workspace_launch_apps
     }
 
     pub fn workspace_only(&self) -> bool {
@@ -678,6 +683,8 @@ struct RawExistingProfile {
 #[serde(deny_unknown_fields)]
 struct RawDesktopResources {
     #[serde(default)]
+    workspace_launch_apps: bool,
+    #[serde(default)]
     workspace_applications: HashMap<String, crate::workspace::WorkspaceApplication>,
     #[serde(default)]
     workspace_space_id: Option<u64>,
@@ -865,6 +872,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             origins: raw_browser_origins,
         } = browser;
         let RawDesktopResources {
+            workspace_launch_apps,
             workspace_applications,
             workspace_space_id,
             workspace_allow_mission_control,
@@ -1035,7 +1043,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             );
         }
         let applications = validate_applications(raw_applications)?;
-        if !workspace_applications.is_empty()
+        if (workspace_launch_apps || !workspace_applications.is_empty())
             && (version != 3 || !workspace_only || !selected_windows_only)
         {
             return Err(
@@ -1170,6 +1178,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             desktop_applications,
             desktop_windows,
             desktop_display,
+            workspace_launch_apps,
             workspace_applications,
             workspace_space_id,
             workspace_allow_mission_control,
@@ -1568,6 +1577,27 @@ mod tests {
     }
 
     #[cfg(feature = "yaml")]
+    #[test]
+    fn normal_workspace_launch_requires_version_three_window_isolation() {
+        let source = r#"{"version":3,"resources":{"desktop":{"selected_windows_only":true,"workspace_only":true,"workspace_launch_apps":true}},"allow":{"tools":["launch_app","list_apps"]}}"#;
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), source).unwrap();
+        let manifest = load_manifest(file.path()).unwrap();
+        assert!(manifest.workspace_launch_apps());
+        assert!(manifest.workspace_application_aliases().is_empty());
+        for invalid in [
+            source.replace("\"version\":3", "\"version\":2"),
+            source.replace("\"workspace_only\":true", "\"workspace_only\":false"),
+            source.replace(
+                "\"selected_windows_only\":true",
+                "\"selected_windows_only\":false",
+            ),
+        ] {
+            std::fs::write(file.path(), invalid).unwrap();
+            assert!(load_manifest(file.path()).is_err());
+        }
+    }
+
     #[test]
     fn workspace_launch_recipes_require_explicit_launch_and_window_isolation() {
         let source = r#"{"version":3,"resources":{"apps":[{"bundle_id":"com.test.app","launch":true}],"desktop":{"selected_windows_only":true,"workspace_only":true,"workspace_applications":{"notes":{"bundle_id":"com.test.app"}}}},"allow":{"tools":["launch_workspace_app"]}}"#;
