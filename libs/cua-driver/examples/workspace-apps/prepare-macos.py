@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare trusted Helium/TextEdit/Ghostty launch recipes; launch no applications."""
 import argparse
+import copy
 import json
 from pathlib import Path
 
@@ -56,7 +57,7 @@ def main():
                       "write": [{"dir": str(root), "recursive": True}]},
         },
         "allow": {"tools": [
-            "start_session", "get_session",
+            "start_session", "get_session", "get_session_state",
             "get_browser_state", "browser_navigate", "browser_click", "browser_type",
             "browser_dialog",
             "create_workspace", "get_workspace_state", "launch_workspace_app",
@@ -67,6 +68,9 @@ def main():
             "start_recording", "get_recording_state", "stop_recording", "end_session",
         ]},
     }
+    second = copy.deepcopy(manifest["resources"]["desktop"]["workspace_applications"]["helium"])
+    second["arguments"][0] = "--user-data-dir=" + str(root / "helium-two-profile")
+    manifest["resources"]["desktop"]["workspace_applications"]["helium-two"] = second
     if args.ghostty:
         manifest["resources"]["apps"].append(
             {"bundle_id": "com.mitchellh.ghostty", "launch": True})
@@ -81,6 +85,7 @@ def main():
         "type": "stdio", "command": str(driver), "args": ["mcp", "--direct"],
         "env": {
             "CUA_DRIVER_PERMISSION_MODE": "standard",
+            "CUA_DRIVER_RS_SESSION_IDLE_TTL_SECS": "3600",
             "CUA_DRIVER_CAPABILITY_MANIFEST_FILE": str(manifest_path),
             "CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED": "1",
             "CUA_DRIVER_RS_TELEMETRY_ENABLED": "0", "CUA_DRIVER_RS_UPDATE_CHECK": "0",

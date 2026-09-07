@@ -1276,7 +1276,7 @@ impl ToolRegistry {
             {
                 let mut result = protected_refusal(
                     "session_ended",
-                    "this session has ended; call start_session explicitly to reuse its label",
+                    "this session has ended or expired; its workspace and window grants were revoked. Call start_session explicitly to reuse its label for a fresh session, then create a new workspace; restarting does not restore previous grants",
                 );
                 restore_public_runtime_result(&mut result, &runtime_prefix);
                 return result;

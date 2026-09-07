@@ -1,7 +1,7 @@
 # Agent-launched macOS workspace
 
 This example uses the existing Cua MCP server and trusted v3 capability manifest.
-The agent creates a Mission Control desktop, launches a clean Helium instance and
+The agent creates a Mission Control desktop, can launch two independent Helium windows and
 a separate TextEdit document, and receives access only to their exact windows.
 No fixture process, copied window IDs, or fifteen-minute fixture timer is involved.
 
@@ -47,6 +47,14 @@ The launch result identifies the requested app in `launched_app` with `app`,
 `pid`, and `window_id`. Use those IDs directly; do not infer the app from the
 order of the workspace's windows. `start_session` is optional and supported by
 this manifest. If you choose a session label, repeat it throughout.
+After regenerating configuration, reconnect the MCP server to load it. Editing a
+manifest on disk does not update an already-running connection.
+
+For a second Helium window, call `launch_workspace_app {"app":"helium-two"}`
+with the same session. It uses its own fresh profile and process. Both windows
+belong to the same workspace. Repeating `helium` returns the first window;
+`File > New Window` creates an unapproved sibling and is not the workspace launch
+route. Use the returned PID/window ID to bind each browser independently.
 
 For browser work, bind with `get_browser_state`, then use its `target_id` and
 `tab_id` with typed browser tools. To open a new tab, AXPress the `New Tab`
@@ -97,6 +105,13 @@ The native launcher must return a new process and an exact live window witness.
 Document recipes bind the exact local `AXDocument`, never a title match. Sibling
 windows, subsequent windows, sheets and dialogs are not automatically approved.
 Moving a personal window into the desktop does not grant access to it.
+
+The generated connection sets `CUA_DRIVER_RS_SESSION_IDLE_TTL_SECS=3600` so
+pausing between prompts does not hit the driver's default five-minute timeout.
+Keep the same MCP connection and session label across follow-ups. Do not call
+`end_session` at the end of each reply. One hour without activity still expires
+this development session; disconnect and explicit ending still revoke grants.
+This setting does not extend a trusted SDK session's separate authorization TTL.
 
 Closing a window or ending the session revokes its access. Reconnecting does not
 inherit prior window grants or workspace ownership. Existing apps and desktops
