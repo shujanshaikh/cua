@@ -35,6 +35,7 @@ mod stop;
 mod telemetry;
 mod updater;
 mod version_check;
+mod workspace_config;
 
 use std::sync::Arc;
 
@@ -520,6 +521,15 @@ fn main() {
             let tools = inspect_tools_without_runtime();
             cli::run_describe(&tools, &name);
         }
+        cli::Command::WorkspaceConfig { output } => {
+            match workspace_config::prepare(std::path::Path::new(&output)) {
+                Ok(config) => println!("{}", serde_json::to_string_pretty(&config).unwrap()),
+                Err(error) => {
+                    eprintln!("workspace setup failed: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
         cli::Command::McpConfig { client } => {
             cli::run_mcp_config(client.as_deref());
         }
@@ -922,6 +932,15 @@ fn main() -> anyhow::Result<()> {
             let tools = inspect_tools_without_runtime();
             cli::run_describe(&tools, &name);
             return Ok(());
+        }
+        cli::Command::WorkspaceConfig { output } => {
+            match workspace_config::prepare(std::path::Path::new(&output)) {
+                Ok(config) => println!("{}", serde_json::to_string_pretty(&config).unwrap()),
+                Err(error) => {
+                    eprintln!("workspace setup failed: {error}");
+                    std::process::exit(1);
+                }
+            }
         }
         cli::Command::McpConfig { client } => {
             cli::run_mcp_config(client.as_deref());

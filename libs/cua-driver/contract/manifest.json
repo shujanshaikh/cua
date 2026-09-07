@@ -395,7 +395,7 @@
     },
     {
       "name": "create_workspace",
-      "description": "Create a session-owned agent Space without selecting it. Trusted configuration may explicitly permit visible Mission Control setup on macOS. Requires a trusted selected-window session. When trusted configuration supplies an existing Space, attach to it and report space_created=false. Private native operations must verify their postconditions; unsupported platforms refuse.",
+      "description": "Create a session-owned agent Space without selecting it. Trusted configuration may explicitly permit visible Mission Control setup on macOS. Requires a trusted selected-window session. When trusted configuration supplies an existing Space, attach to it and report space_created=false. Private native operations must verify their postconditions; unsupported platforms refuse. Workspace workflow: keep one session across conversation turns; read available_apps, create_workspace, then launch_workspace_app. Each alias launches once: use a different configured alias for a second window, not an app menu. Keep the session open for follow-ups; end_session revokes workspace and window grants. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process.",
       "platforms": [
         "macos",
         "windows",
@@ -517,7 +517,7 @@
     },
     {
       "name": "delete_workspace",
-      "description": "Explicitly delete an empty inactive Space created by this session. macOS deletion briefly shows Mission Control. Never delete a pre-existing Space or close applications. Unsupported native deletion refuses.",
+      "description": "Explicitly delete an empty inactive Space created by this session. macOS deletion briefly shows Mission Control. Never delete a pre-existing Space or close applications. Unsupported native deletion refuses. Workspace workflow: keep one session across conversation turns; read available_apps, create_workspace, then launch_workspace_app. Each alias launches once: use a different configured alias for a second window, not an app menu. Keep the session open for follow-ups; end_session revokes workspace and window grants. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process.",
       "platforms": [
         "macos",
         "windows",
@@ -1514,7 +1514,10 @@
           "expires_in_seconds": {
             "format": "uint64",
             "minimum": 0,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "idle_seconds": {
             "format": "uint64",
@@ -1562,8 +1565,7 @@
           "transport",
           "cursor_visible",
           "recording_active",
-          "idle_seconds",
-          "expires_in_seconds"
+          "idle_seconds"
         ],
         "type": "object"
       }
@@ -1669,7 +1671,7 @@
     },
     {
       "name": "get_workspace_state",
-      "description": "Read the current session's workspace ownership and approved window membership. Reports user movement, stale windows and deleted Spaces without capturing a display.",
+      "description": "Read the current session's workspace ownership and approved window membership. Reports user movement, stale windows and deleted Spaces without capturing a display. Workspace workflow: keep one session across conversation turns; read available_apps, create_workspace, then launch_workspace_app. Each alias launches once: use a different configured alias for a second window, not an app menu. Keep the session open for follow-ups; end_session revokes workspace and window grants. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process.",
       "platforms": [
         "macos",
         "windows",
@@ -2176,7 +2178,7 @@
     },
     {
       "name": "launch_workspace_app",
-      "description": "Launch a trusted configured app in a fresh process, approve only its exact initial window, and move it into this session workspace without switching desktops. The app argument is a trusted alias, never a bundle ID, path, URL, or launch arguments. Existing processes and ambiguous windows refuse. Repeated calls return the same session-created window; closed windows require a new session. Unsupported platforms refuse.",
+      "description": "Launch a trusted configured app in a fresh process, approve only its exact initial window, and move it into this session workspace without switching desktops. The app argument is a trusted alias, never a bundle ID, path, URL, or launch arguments. Existing processes and ambiguous windows refuse. Repeated calls return the same session-created window; closed windows require a new session. Unsupported platforms refuse. Workspace workflow: keep one session across conversation turns; read available_apps, create_workspace, then launch_workspace_app. Each alias launches once: use a different configured alias for a second window, not an app menu. Keep the session open for follow-ups; end_session revokes workspace and window grants. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process.",
       "platforms": [
         "macos",
         "windows",
@@ -2375,7 +2377,10 @@
                 "expires_in_seconds": {
                   "format": "uint64",
                   "minimum": 0,
-                  "type": "integer"
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 },
                 "idle_seconds": {
                   "format": "uint64",
@@ -2423,8 +2428,7 @@
                 "transport",
                 "cursor_visible",
                 "recording_active",
-                "idle_seconds",
-                "expires_in_seconds"
+                "idle_seconds"
               ],
               "type": "object"
             },
@@ -2656,7 +2660,7 @@
     },
     {
       "name": "move_window_to_workspace",
-      "description": "Move an already-approved exact window into this session's workspace and verify membership. Moving never grants access and never switches Spaces.",
+      "description": "Move an already-approved exact window into this session's workspace and verify membership. Moving never grants access and never switches Spaces. Workspace workflow: keep one session across conversation turns; read available_apps, create_workspace, then launch_workspace_app. Each alias launches once: use a different configured alias for a second window, not an app menu. Keep the session open for follow-ups; end_session revokes workspace and window grants. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process.",
       "platforms": [
         "macos",
         "windows",
@@ -3007,7 +3011,7 @@
     },
     {
       "name": "release_workspace",
-      "description": "Release this session's workspace ownership. Preserve applications, windows and Spaces. Releasing ownership preserves window approval; workspace-only sessions lose access until a workspace is owned again.",
+      "description": "Release this session's workspace ownership. Preserve applications, windows and Spaces. Releasing ownership preserves window approval; workspace-only sessions lose access until a workspace is owned again. Workspace workflow: keep one session across conversation turns; read available_apps, create_workspace, then launch_workspace_app. Each alias launches once: use a different configured alias for a second window, not an app menu. Keep the session open for follow-ups; end_session revokes workspace and window grants. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process.",
       "platforms": [
         "macos",
         "windows",
@@ -3129,7 +3133,7 @@
     },
     {
       "name": "restore_workspace_windows",
-      "description": "Explicitly restore windows moved by this workspace to their recorded original Spaces. Refuse to override subsequent user movement; report partial failures. Never switch Spaces.",
+      "description": "Explicitly restore windows moved by this workspace to their recorded original Spaces. Refuse to override subsequent user movement; report partial failures. Never switch Spaces. Workspace workflow: keep one session across conversation turns; read available_apps, create_workspace, then launch_workspace_app. Each alias launches once: use a different configured alias for a second window, not an app menu. Keep the session open for follow-ups; end_session revokes workspace and window grants. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process.",
       "platforms": [
         "macos",
         "windows",
@@ -3251,7 +3255,7 @@
     },
     {
       "name": "reveal_workspace",
-      "description": "Explicitly switch to this session's workspace. This is the only workspace operation that may switch the user's active Space.",
+      "description": "Explicitly switch to this session's workspace. This is the only workspace operation that may switch the user's active Space. Workspace workflow: keep one session across conversation turns; read available_apps, create_workspace, then launch_workspace_app. Each alias launches once: use a different configured alias for a second window, not an app menu. Keep the session open for follow-ups; end_session revokes workspace and window grants. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process.",
       "platforms": [
         "macos",
         "windows",

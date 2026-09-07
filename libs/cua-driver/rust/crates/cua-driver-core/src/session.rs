@@ -348,8 +348,28 @@ struct LifecycleRecord {
     /// default TTL so tests and process-level configuration can still supply
     /// that fallback.
     idle_ttl: Option<Duration>,
+    workspace_owned: bool,
     in_flight: usize,
     pending_end: Option<SessionEndReason>,
+}
+
+impl LifecycleRecord {
+    fn retains_workspace(&self) -> bool {
+        self.workspace_owned
+            && self.idle_ttl.is_none()
+            && matches!(
+                self.transport,
+                SessionTransport::McpStdio | SessionTransport::McpHttp
+            )
+    }
+}
+
+/// Keep an owned MCP workspace until transport close or explicit session end.
+/// Trusted host deadlines remain authoritative and are never extended here.
+pub(crate) fn retain_workspace(session: &str, owned: bool) {
+    if let Some(record) = lifecycle_records().lock().unwrap().get_mut(session) {
+        record.workspace_owned = owned;
+    }
 }
 
 static LIFECYCLE_RECORDS: OnceLock<Mutex<HashMap<String, LifecycleRecord>>> = OnceLock::new();
@@ -369,7 +389,7 @@ pub struct LifecycleSessionSnapshot {
     pub ending: bool,
     pub started_for: Duration,
     pub idle: Duration,
-    pub expires_in: Duration,
+    pub expires_in: Option<Duration>,
 }
 
 /// RAII protection for one admitted session-requiring dispatch. Idle eviction
@@ -477,6 +497,7 @@ fn begin_session_dispatch_inner(
                 client_kind,
                 started_at: now,
                 idle_ttl,
+                workspace_owned: false,
                 in_flight: 0,
                 pending_end: None,
             });
@@ -575,6 +596,7 @@ fn activate_session_inner(
                     client_kind,
                     started_at: now,
                     idle_ttl,
+                    workspace_owned: false,
                     in_flight: 0,
                     pending_end: None,
                 },
@@ -659,6 +681,7 @@ pub fn activate_or_revive_session_for_owner(
                     client_kind,
                     started_at: now,
                     idle_ttl,
+                    workspace_owned: false,
                     in_flight: 0,
                     pending_end: None,
                 },
@@ -697,7 +720,7 @@ pub fn session_snapshot(
         ending: record.pending_end.is_some(),
         started_for: record.started_at.elapsed(),
         idle,
-        expires_in: ttl.saturating_sub(idle),
+        expires_in: (!record.retains_workspace()).then(|| ttl.saturating_sub(idle)),
     })
 }
 
@@ -763,6 +786,8 @@ pub fn list_session_snapshots_with_prefix(
         .into_iter()
         .map(|(_, runtime_id, record)| {
             let idle = session_idle_duration(&runtime_id).unwrap_or_default();
+            let expires_in = (!record.retains_workspace())
+                .then(|| record.idle_ttl.unwrap_or(ttl).saturating_sub(idle));
             LifecycleSessionSnapshot {
                 runtime_id,
                 public_label: record.public_label,
@@ -773,7 +798,7 @@ pub fn list_session_snapshots_with_prefix(
                 ending: record.pending_end.is_some(),
                 started_for: record.started_at.elapsed(),
                 idle,
-                expires_in: record.idle_ttl.unwrap_or(ttl).saturating_sub(idle),
+                expires_in,
             }
         })
         .collect()
@@ -1565,14 +1590,26 @@ pub fn evict_idle(ttl: Duration) -> Vec<String> {
         .lock()
         .unwrap()
         .iter()
-        .map(|(id, record)| (id.clone(), (record.in_flight, record.idle_ttl)))
+        .map(|(id, record)| {
+            (
+                id.clone(),
+                (
+                    record.in_flight,
+                    record.idle_ttl,
+                    record.retains_workspace(),
+                ),
+            )
+        })
         .collect::<HashMap<_, _>>();
     let stale: Vec<String> = {
         let map = activity().lock().unwrap();
         map.iter()
             .filter(|(id, last)| {
-                let (in_flight, session_ttl) = lifecycle.get(*id).copied().unwrap_or_default();
-                now.duration_since(**last) >= session_ttl.unwrap_or(ttl) && in_flight == 0
+                let (in_flight, session_ttl, retained) =
+                    lifecycle.get(*id).copied().unwrap_or_default();
+                !retained
+                    && now.duration_since(**last) >= session_ttl.unwrap_or(ttl)
+                    && in_flight == 0
             })
             .map(|(id, _)| id.clone())
             .collect()
@@ -1591,14 +1628,25 @@ pub fn evict_idle_with_prefix(ttl: Duration, prefix: &str) -> Vec<String> {
         .lock()
         .unwrap()
         .iter()
-        .map(|(id, record)| (id.clone(), (record.in_flight, record.idle_ttl)))
+        .map(|(id, record)| {
+            (
+                id.clone(),
+                (
+                    record.in_flight,
+                    record.idle_ttl,
+                    record.retains_workspace(),
+                ),
+            )
+        })
         .collect::<HashMap<_, _>>();
     let stale: Vec<String> = {
         let map = activity().lock().unwrap();
         map.iter()
             .filter(|(id, last)| {
-                let (in_flight, session_ttl) = lifecycle.get(*id).copied().unwrap_or_default();
+                let (in_flight, session_ttl, retained) =
+                    lifecycle.get(*id).copied().unwrap_or_default();
                 id.starts_with(prefix)
+                    && !retained
                     && now.duration_since(**last) >= session_ttl.unwrap_or(ttl)
                     && in_flight == 0
             })
@@ -1733,6 +1781,60 @@ mod tests {
             calls.load(Ordering::Relaxed),
             1,
             "hook must run exactly once for a given session id"
+        );
+    }
+
+    #[test]
+    fn workspace_retention_ends_on_release_disconnect_and_trusted_deadline() {
+        for (suffix, release) in [("release", true), ("disconnect", false)] {
+            let sid = format!("workspace-retention-{suffix}");
+            let owner = format!("owner-{sid}");
+            activate_session(
+                &sid,
+                Some("workspace"),
+                &owner,
+                false,
+                SessionTransport::McpStdio,
+                SessionClientKind::Mcp,
+            )
+            .unwrap();
+            retain_workspace(&sid, true);
+            assert!(evict_idle_with_prefix(Duration::ZERO, &sid).is_empty());
+            assert_eq!(
+                session_snapshot(&sid, &owner, Duration::ZERO)
+                    .unwrap()
+                    .expires_in,
+                None
+            );
+            if release {
+                retain_workspace(&sid, false);
+                assert_eq!(
+                    evict_idle_with_prefix(Duration::ZERO, &sid),
+                    vec![sid.clone()]
+                );
+            } else {
+                assert_eq!(
+                    end_sessions_for_owner(&owner, SessionEndReason::ProcessExit),
+                    1
+                );
+            }
+            assert!(is_session_ended(&sid));
+        }
+        let sid = "workspace-retention-trusted";
+        activate_session_with_ttl(
+            sid,
+            None,
+            "trusted-owner",
+            false,
+            SessionTransport::McpStdio,
+            SessionClientKind::Mcp,
+            Duration::ZERO,
+        )
+        .unwrap();
+        retain_workspace(sid, true);
+        assert_eq!(
+            evict_idle_with_prefix(Duration::from_secs(3600), sid),
+            vec![sid.to_owned()]
         );
     }
 
@@ -2027,7 +2129,7 @@ mod tests {
         )
         .unwrap();
         let snapshot = session_snapshot(sid, owner, Duration::from_secs(3600)).unwrap();
-        assert!(snapshot.expires_in <= Duration::from_millis(1));
+        assert!(snapshot.expires_in.unwrap() <= Duration::from_millis(1));
         let operator_snapshot = list_session_snapshots_with_prefix(
             "test-trusted-lifecycle-ttl-",
             Duration::from_secs(3600),
@@ -2035,7 +2137,7 @@ mod tests {
         .into_iter()
         .find(|snapshot| snapshot.runtime_id == sid)
         .unwrap();
-        assert!(operator_snapshot.expires_in <= Duration::from_millis(1));
+        assert!(operator_snapshot.expires_in.unwrap() <= Duration::from_millis(1));
 
         std::thread::sleep(Duration::from_millis(5));
         assert_eq!(

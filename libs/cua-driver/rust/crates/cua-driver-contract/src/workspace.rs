@@ -76,7 +76,7 @@ impl ToolOutput for WorkspaceStateOutput {}
 fn contract<I: ToolInput>(description: &str, read_only: bool, destructive: bool) -> ToolContract {
     ToolContract {
         name: I::TOOL_NAME.into(),
-        description: description.into(),
+        description: format!("{description} Workspace workflow: keep one session across conversation turns; read available_apps, create_workspace, then launch_workspace_app. Each alias launches once: use a different configured alias for a second window, not an app menu. Keep the session open for follow-ups; end_session revokes workspace and window grants. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process."),
         platforms: vec![Platform::Macos, Platform::Windows, Platform::Linux],
         aliases: vec![],
         capabilities: vec!["session.workspace".into()],

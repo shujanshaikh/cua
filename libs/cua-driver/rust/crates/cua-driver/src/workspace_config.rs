@@ -1,0 +1,94 @@
+//! Operator setup for the ordinary CLI -> MCP proxy -> app daemon path.
+use serde_json::{json, Value};
+use std::path::Path;
+
+pub fn prepare(output: &Path) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        cfg!(target_os = "macos"),
+        "native workspaces are currently supported only on macOS"
+    );
+    anyhow::ensure!(
+        Path::new("/Applications/Helium.app").is_dir(),
+        "install Helium before preparing its launch recipes"
+    );
+    // Never overwrite profiles, documents, or a previously approved policy.
+    std::fs::create_dir(output)?;
+    let root = output.canonicalize()?;
+    let notes = root.join("Agent notes.txt");
+    std::fs::write(&notes, "Agent workspace notes\n")?;
+    let manifest = manifest(&root);
+    let path = root.join("manifest.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&manifest)?)?;
+    let socket = std::env::temp_dir().join(format!("cua-{}.sock", uuid::Uuid::new_v4().simple()));
+    let config = json!({"mcpServers":{"cua-driver":{
+        "command": std::env::current_exe()?,
+        "args":["mcp","--socket",socket],
+        "env":{
+            "CUA_DRIVER_PERMISSION_MODE":"standard",
+            "CUA_DRIVER_CAPABILITY_MANIFEST_FILE":path,
+            "CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED":"1"
+        }
+    }}});
+    std::fs::write(root.join("mcp.json"), serde_json::to_vec_pretty(&config)?)?;
+    Ok(config)
+}
+
+fn manifest(root: &Path) -> Value {
+    let browser = |alias: &str| {
+        json!({
+            "bundle_id":"net.imput.helium",
+            "arguments":[format!("--user-data-dir={}/{}-{{workspace}}",root.display(),alias),
+                "--no-first-run","--no-default-browser-check","--remote-debugging-port=0",
+                "--new-window","https://example.com"]
+        })
+    };
+    json!({"version":3,"resources":{
+        "apps":[{"bundle_id":"net.imput.helium","launch":true},{"bundle_id":"com.apple.TextEdit","launch":true}],
+        "browser":{"selected_windows_only":true},
+        "desktop":{"selected_windows_only":true,"workspace_only":true,
+            "workspace_allow_mission_control":true,"windows":[],
+            "workspace_applications":{
+                "helium":browser("helium"),"helium-two":browser("helium-two"),
+                "notes":{"bundle_id":"com.apple.TextEdit","arguments":["-ApplePersistenceIgnoreState","YES"],"urls":[root.join("Agent notes.txt")]}
+            }},
+        "files":{"read":[{"dir":root,"recursive":true}],"write":[{"dir":root,"recursive":true}]}
+    },"allow":{"tools":[
+        "start_session","get_session","get_session_state","list_sessions","end_session",
+        "create_workspace","get_workspace_state","launch_workspace_app","move_window_to_workspace",
+        "reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace",
+        "get_browser_state","browser_navigate","browser_click","browser_type","browser_dialog",
+        "list_apps","list_windows","get_window_state","verify_state","click","double_click",
+        "right_click","scroll","drag","set_value","type_text","press_key","hotkey",
+        "invoke_menu","start_recording","get_recording_state","stop_recording"
+    ]}})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn recipes_have_distinct_workspace_scoped_profiles() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("Agent notes.txt"), "").unwrap();
+        let manifest = manifest(root.path());
+        let apps = &manifest["resources"]["desktop"]["workspace_applications"];
+        assert_ne!(
+            apps["helium"]["arguments"][0],
+            apps["helium-two"]["arguments"][0]
+        );
+        assert!(apps["helium"]["arguments"][0]
+            .as_str()
+            .unwrap()
+            .contains("{workspace}"));
+        let path = root.path().join("manifest.json");
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        // Validate the same policy parser used at daemon startup.
+        assert_eq!(
+            cua_driver_core::session_manifest::load_manifest(&path)
+                .unwrap()
+                .workspace_application_aliases()
+                .len(),
+            3
+        );
+    }
+}

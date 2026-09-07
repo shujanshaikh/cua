@@ -5,6 +5,10 @@ The agent creates a Mission Control desktop, can launch two independent Helium w
 a separate TextEdit document, and receives access only to their exact windows.
 No fixture process, copied window IDs, or fifteen-minute fixture timer is involved.
 
+For normal installed CLI and daemon testing, use
+[the integrated setup](../../docs/workspace-mcp-setup.md). This Python example
+remains a supporting direct-runtime diagnostic.
+
 ## Prepare a session
 
 Build the development driver from your checkout. Keep its existing stable signing
@@ -106,12 +110,12 @@ Document recipes bind the exact local `AXDocument`, never a title match. Sibling
 windows, subsequent windows, sheets and dialogs are not automatically approved.
 Moving a personal window into the desktop does not grant access to it.
 
-The generated connection sets `CUA_DRIVER_RS_SESSION_IDLE_TTL_SECS=3600` so
-pausing between prompts does not hit the driver's default five-minute timeout.
-Keep the same MCP connection and session label across follow-ups. Do not call
-`end_session` at the end of each reply. One hour without activity still expires
-this development session; disconnect and explicit ending still revoke grants.
-This setting does not extend a trusted SDK session's separate authorization TTL.
+An MCP session that owns a workspace stays alive while its transport remains
+connected. No longer idle timeout is required. Keep the same connection and
+session label across follow-ups; do not end the session after each reply.
+Release restores ordinary idle eviction. Disconnect, explicit session ending,
+and trusted authorization deadlines still revoke access. Session status reports
+`expires_in_seconds: null` while the workspace suspends ordinary idle eviction.
 
 Closing a window or ending the session revokes its access. Reconnecting does not
 inherit prior window grants or workspace ownership. Existing apps and desktops

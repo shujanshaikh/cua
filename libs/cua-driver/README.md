@@ -20,6 +20,13 @@ language-native MCP facade and have no `/sdk`, `/mcp`, or `/native` public
 suffix. MCP remains implemented by the `cua-driver` executable as the
 runtime-neutral agent boundary.
 
+## Agent workspaces
+
+Use `cua-driver workspace-config --output <new-directory>` to prepare Helium and
+TextEdit workspace recipes for the normal daemon-backed MCP server. See
+[installed workspace setup and lifetime](docs/workspace-mcp-setup.md). Source
+candidates use the repository's `cua-driver-local` installer.
+
 ## Computer History macOS preview
 
 Nightly macOS builds can provide an opt-in, encrypted history of actions

@@ -103,7 +103,7 @@ fn lifecycle_output(snapshot: crate::session::LifecycleSessionSnapshot) -> Sessi
         cursor_visible,
         recording_active,
         idle_seconds: snapshot.idle.as_secs(),
-        expires_in_seconds: snapshot.expires_in.as_secs(),
+        expires_in_seconds: snapshot.expires_in.map(|ttl| ttl.as_secs()),
     }
 }
 

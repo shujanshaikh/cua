@@ -45,6 +45,9 @@ pub enum Command {
         /// `serve::default_socket_path()` when None.
         socket: Option<String>,
     },
+    WorkspaceConfig {
+        output: String,
+    },
     McpConfig {
         client: Option<String>,
     },
@@ -216,6 +219,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--dwell-ms",
     "--idle-hide-ms",
     "--screenshot-out-file",
+    "--output",
     "--client",
     "--socket",
     "--permission-mode",
@@ -301,6 +305,7 @@ fn finite_command_name_from_args(args: &[String]) -> Option<&'static str> {
         None | Some("mcp" | "serve" | "telemetry") => None,
         Some("list-tools") => Some("list_tools"),
         Some("describe") => Some("describe"),
+        Some("workspace-config") => Some("workspace_config"),
         Some("mcp-config") => Some("mcp_config"),
         Some("manifest") => Some("manifest"),
         Some("call") => Some("call"),
@@ -750,6 +755,12 @@ pub fn parse_command() -> Command {
             grants: grants.clone(),
         },
         Some("list-tools") => Command::ListTools,
+        Some("workspace-config") => Command::WorkspaceConfig {
+            output: flag_value(&args, "--output").unwrap_or_else(|| {
+                eprintln!("usage: cua-driver workspace-config --output <new-directory>");
+                process::exit(64);
+            }),
+        },
         Some("mcp-config") => Command::McpConfig { client: mcp_client },
         Some("serve") => Command::Serve {
             socket,
@@ -1209,6 +1220,10 @@ pub fn launch_daemon_and_wait(
     let state = crate::history_runtime::DaemonLaunchState {
         claude_code_compat,
         grants: grants.to_vec(),
+        permission_mode: std::env::var("CUA_DRIVER_PERMISSION_MODE").ok(),
+        capability_manifest: std::env::var("CUA_DRIVER_CAPABILITY_MANIFEST_FILE").ok(),
+        approve_capability_manifest: std::env::var("CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED")
+            .is_ok_and(|value| value == "1"),
         ..Default::default()
     };
     launch_daemon_with_state_and_wait(
@@ -1317,6 +1332,10 @@ pub fn launch_daemon_and_wait(
     let state = crate::history_runtime::DaemonLaunchState {
         claude_code_compat,
         grants: grants.to_vec(),
+        permission_mode: std::env::var("CUA_DRIVER_PERMISSION_MODE").ok(),
+        capability_manifest: std::env::var("CUA_DRIVER_CAPABILITY_MANIFEST_FILE").ok(),
+        approve_capability_manifest: std::env::var("CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED")
+            .is_ok_and(|value| value == "1"),
         ..Default::default()
     };
     launch_daemon_with_state_and_wait(
@@ -1722,6 +1741,30 @@ where
         }
     }
 
+    // Environment policy is immutable at daemon startup. Never silently attach
+    // this connection to a daemon running a different manifest.
+    if let Ok(path) = std::env::var("CUA_DRIVER_CAPABILITY_MANIFEST_FILE") {
+        let expected =
+            cua_driver_core::session_manifest::load_manifest(std::path::Path::new(&path))
+                .map_err(anyhow::Error::msg)?;
+        let response = crate::serve::send_request(
+            &socket_path,
+            &crate::serve::DaemonRequest {
+                method: "authorization_status".into(),
+                name: None,
+                args: None,
+                session_id: None,
+                observation_origin: Some(crate::serve::ToolObservationOrigin::Direct),
+                client_kind: None,
+            },
+        )?;
+        let actual = response.result.unwrap_or_default();
+        anyhow::ensure!(actual["capability_manifest"]["sha256"].as_str() == Some(expected.sha256())
+            && actual["capability_manifest_approved_at_startup"] == true
+            && actual["capability_manifest_valid"] == true,
+            "daemon policy differs from the configured manifest; stop the daemon at {socket_path} and reconnect to load the reviewed configuration");
+    }
+
     if let Some(on_startup) = on_startup.take() {
         on_startup(daemon, true);
     }
@@ -1869,6 +1912,8 @@ pub fn build_manifest() -> serde_json::Value {
                   { "name": "--screenshot-out-file", "type": "string", "description": "Write image content to this path instead of emitting base64." },
                   { "name": "--socket", "type": "string", "description": "Override the required daemon socket path." }
               ] },
+            { "name": "workspace-config", "description": "Prepare reviewed macOS workspace launch recipes and a normal daemon-backed MCP connection in a new directory.",
+              "args": [ { "name": "--output", "type": "string", "description": "New directory for policy, profiles, and notes." } ] },
             { "name": "mcp-config",
               "description": "Print client-specific connection guidance (MCP config where supported).",
               "args": [ { "name": "--client", "type": "string", "description": "One of: claude, codex, cursor, hermes, antigravity, openclaw, opencode, pi, prime-agent, qwen, droid, zcode. Omit for the generic snippet." } ] },
@@ -3934,6 +3979,15 @@ fn cli_docs_json() -> serde_json::Value {
                     {"name":"socket","short_name":null,"help":"Override the daemon socket or named-pipe path.","type":"String","default_value":null,"is_optional":true},
                     {"name":"pid-file","short_name":null,"help":"Override the pid-file path on Unix targets.","type":"String","default_value":null,"is_optional":true}
                 ],
+                "flags": no_flags,
+                "subcommands": no_subcommands
+            },
+            {
+                "name": "workspace-config",
+                "abstract": "Prepare workspace policy and a normal MCP connection.",
+                "discussion": "macOS: creates a new directory containing reviewed Helium and TextEdit recipes. Uses the app daemon, not a direct test runtime.",
+                "arguments": no_args,
+                "options": [{"name":"output","short_name":null,"help":"New directory for manifest, profiles, and notes.","type":"String","default_value":null,"is_optional":false}],
                 "flags": no_flags,
                 "subcommands": no_subcommands
             },

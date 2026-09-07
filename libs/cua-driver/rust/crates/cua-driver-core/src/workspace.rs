@@ -32,6 +32,21 @@ pub struct WorkspaceApplication {
     pub urls: Vec<String>,
 }
 
+impl WorkspaceApplication {
+    /// Only the trusted recipe can request substitution; the scope is driver-minted.
+    fn for_workspace(&self, scope: &str) -> Self {
+        Self {
+            bundle_id: self.bundle_id.clone(),
+            arguments: self
+                .arguments
+                .iter()
+                .map(|arg| arg.replace("{workspace}", scope))
+                .collect(),
+            urls: self.urls.clone(),
+        }
+    }
+}
+
 pub struct LaunchedWorkspaceWindow {
     pub target: WindowTarget,
     pub identity: Arc<dyn WindowIdentity>,
@@ -80,6 +95,7 @@ fn unsupported() -> String {
 struct Workspace {
     space: u64,
     created: bool,
+    profile_scope: String,
     // Preserve the first origin even after retries and partial native failures.
     moved: HashMap<WindowTarget, Vec<u64>>,
     launched: HashMap<String, WindowTarget>,
@@ -192,11 +208,13 @@ impl Workspaces {
                     // Retain a successful native allocation even if the following
                     // state query fails, so explicit release remains possible.
                     selection.set_workspace(Some(space));
+                    crate::session::retain_workspace(session, true);
                     owned.insert(
                         session.into(),
                         Workspace {
                             space,
                             created: attached.is_none(),
+                            profile_scope: uuid::Uuid::new_v4().to_string(),
                             moved: HashMap::new(),
                             launched: HashMap::new(),
                             launch_failures: HashMap::new(),
@@ -206,6 +224,7 @@ impl Workspaces {
             }
             "get_workspace_state" => {}
             "release_workspace" => {
+                crate::session::retain_workspace(session, false);
                 selection.set_workspace(None);
                 crate::pip_hook::clear_session(session);
                 let released = owned.remove(session);
@@ -246,7 +265,10 @@ impl Workspaces {
                             selection.validate(*target)?;
                             // Do not override a later user placement on an idempotent call.
                         } else {
-                            let launched = match self.backend.launch(recipe) {
+                            let launched = match self
+                                .backend
+                                .launch(&recipe.for_workspace(&workspace.profile_scope))
+                            {
                                 Ok(launched) => launched,
                                 Err(error) => {
                                     // A native error may still have created a process. Retain
@@ -350,6 +372,7 @@ impl Workspaces {
                             return Err("workspace_delete_incomplete: Space still exists".into());
                         }
                         snapshot.owned = false;
+                        crate::session::retain_workspace(session, false);
                         selection.set_workspace(None);
                         crate::pip_hook::clear_session(session);
                         owned.remove(session);
@@ -359,6 +382,7 @@ impl Workspaces {
                 }
             }
         }
+        crate::session::retain_workspace(session, owned.contains_key(session));
         self.snapshot(owned.get(session), selection)
     }
 }
@@ -474,7 +498,7 @@ pub fn register(registry: &mut ToolRegistry, backend: Option<Arc<dyn WorkspaceBa
         registry.register(Box::new(WorkspaceTool {
             def: ToolDef {
                 name: contract.name,
-                description: format!("{} Workspace workflow: keep one session across conversation turns; read available_apps, create_workspace, then launch_workspace_app. Each alias launches once: use a different configured alias for a second window, not an app menu. Keep the session open for follow-ups; end_session revokes workspace and window grants. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process.", contract.description),
+                description: contract.description,
                 input_schema: contract.input_schema,
                 read_only: contract.annotations.read_only,
                 destructive: contract.annotations.destructive,
@@ -489,6 +513,27 @@ pub fn register(registry: &mut ToolRegistry, backend: Option<Arc<dyn WorkspaceBa
 #[cfg(all(test, feature = "yaml"))]
 mod tests {
     use super::*;
+    #[test]
+    fn profiles_are_scoped_to_the_owned_workspace() {
+        let recipe = WorkspaceApplication {
+            bundle_id: "browser".into(),
+            arguments: vec!["--user-data-dir=/profiles/helium-{workspace}".into()],
+            urls: vec![],
+        };
+        assert_eq!(
+            recipe.for_workspace("a").arguments,
+            recipe.for_workspace("a").arguments
+        );
+        assert_ne!(
+            recipe.for_workspace("a").arguments,
+            recipe.for_workspace("b").arguments
+        );
+        assert_eq!(
+            recipe.for_workspace("a").arguments[0],
+            "--user-data-dir=/profiles/helium-a"
+        );
+    }
+
     use crate::authorization::PermissionMode;
     use crate::selected_windows::{WindowIdentity, WindowSelectionBackend};
     use crate::session_authorization::{

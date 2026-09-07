@@ -41,7 +41,7 @@ def main():
                 "workspace_applications": {
                     "helium": {
                         "bundle_id": "net.imput.helium",
-                        "arguments": ["--user-data-dir=" + str(root / "helium-profile"),
+                        "arguments": ["--user-data-dir=" + str(root / "helium-{workspace}"),
                                       "--no-first-run", "--no-default-browser-check",
                                       "--remote-debugging-port=0",
                                       "--new-window", "https://example.com"],
@@ -69,7 +69,7 @@ def main():
         ]},
     }
     second = copy.deepcopy(manifest["resources"]["desktop"]["workspace_applications"]["helium"])
-    second["arguments"][0] = "--user-data-dir=" + str(root / "helium-two-profile")
+    second["arguments"][0] = "--user-data-dir=" + str(root / "helium-two-{workspace}")
     manifest["resources"]["desktop"]["workspace_applications"]["helium-two"] = second
     if args.ghostty:
         manifest["resources"]["apps"].append(
@@ -85,7 +85,6 @@ def main():
         "type": "stdio", "command": str(driver), "args": ["mcp", "--direct"],
         "env": {
             "CUA_DRIVER_PERMISSION_MODE": "standard",
-            "CUA_DRIVER_RS_SESSION_IDLE_TTL_SECS": "3600",
             "CUA_DRIVER_CAPABILITY_MANIFEST_FILE": str(manifest_path),
             "CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED": "1",
             "CUA_DRIVER_RS_TELEMETRY_ENABLED": "0", "CUA_DRIVER_RS_UPDATE_CHECK": "0",
