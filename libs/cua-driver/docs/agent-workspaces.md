@@ -6,6 +6,12 @@ This branch adds driver tools and trusted selected-window sessions. It uses the 
 
 The changes live in the requesting user's fork. No upstream PR is part of delivery. Native movement code was adapted from [trycua/cua#2429](https://github.com/trycua/cua/pull/2429), with credit to Francesco Bonacci and injaneity preserved in the implementation commit.
 
+For the agent-driven “create a desktop, open Helium and notes, use them” flow,
+see the [workspace apps MCP example](../examples/workspace-apps/README.md).
+`launch_workspace_app` accepts a trusted alias and admits only the new native
+window created by that recipe. The following static-window setup is still
+available for hosts that already have approved windows.
+
 ## Trusted selection
 
 A trusted host writes a capability manifest and supplies its path through `TrustedSessionOptions.capability_manifest_path`. Window IDs come from the host's existing trusted discovery/approval mechanism. The agent cannot set or extend the selection through tool arguments.
@@ -53,7 +59,7 @@ Use real, currently live IDs. `selected_windows_only` and `workspace_space_id` r
 
 On macOS, binding requires Accessibility permission, an exact top-level AX window, its retained remote AX object, WindowServer ownership, and the process start time. No title/geometry match authorizes a window. The driver retains the exact AX object across movement and carries session authority into native workers. Binding an already inactive window can use serialized, bounded private AX token recovery; unresolved targets remain refused. Failure to re-prove this witness permanently invalidates that selection entry. Process or window ID reuse does not rebind an invalidated entry. Applications with unreliable AX lifetime identity are refused; this is not a sandbox against a malicious application falsifying its own accessibility data.
 
-The selection is immutable. For replacement, close the old trusted session and create a new one with a fresh manifest and native lifetime witnesses. Editing the loaded file or restarting an agent-callable session does not widen its authority. Handle close revokes the connection immediately; existing lifecycle hooks clear observations and ownership after any admitted work drains. Expired authority refuses dispatch/capture immediately, and the existing runtime maintenance sweep reclaims expired session resources (up to 30 seconds).
+The trusted selection policy is immutable. Explicitly configured workspace launch recipes can admit their newly created exact windows; arbitrary arrivals cannot. For replacement, close the old trusted session and create a new one with a fresh manifest and native lifetime witnesses. Editing the loaded file or restarting an agent-callable session does not widen its authority. Handle close revokes the connection immediately; existing lifecycle hooks clear observations and ownership after any admitted work drains. Expired authority refuses dispatch/capture immediately, and the existing runtime maintenance sweep reclaims expired session resources (up to 30 seconds).
 
 ## SDK and tools
 

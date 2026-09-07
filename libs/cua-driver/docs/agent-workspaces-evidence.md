@@ -144,3 +144,55 @@ Outstanding evidence:
 - Canonical Windows/Linux desktop gates and `libs/cua-driver/tests/runners/macos-lume/run-all.sh --standalone-browser`. Lume is unavailable and this task explicitly permits only this personal Mac. Local diagnostics do not replace these gates.
 
 Native logs and approved-only trajectory artifacts remain on the development Mac under `/private/tmp/cua-workspace-*`; no raw desktop capture is committed. In particular, the early raw native dictionary probe is not publication evidence. Use only the sanitized probe and SDK markers above when sharing results.
+# Agent-launched apps follow-up — 2026-09-07
+
+Implementation SHA: `c384d1fa400f64586cd0c6d5c74ef3cfaac09825`.
+Final sample/export correction: `299616bfb239921b03650c37128b8febab09f4aa`.
+The latter removes an unsupported `wait` entry from the sample manifest and
+exports the generated Python input type; native code is unchanged.
+
+Environment: personal SIP-enabled macOS host, main display ID 1, signed isolated
+development binary (`com.trycua.workspace-dev`). Only fresh Helium profiles and
+TextEdit documents under `/private/tmp/cua-workspace-app-native` were launched.
+No daily-driver installation, personal window, TCC database or SIP setting changed.
+
+Verified through the real stdio MCP connection:
+
+- Creation allocated desktop 4307 without switching; later iterations attached
+  that task-created desktop instead of allocating repeated desktops.
+- Trusted aliases launched fresh Helium and TextEdit processes, bound exact
+  lifetime witnesses and verified movement from desktop 4281 to 4307 while the
+  user's active desktop remained 4198.
+- Discovery returned only the two admitted windows. TextEdit's auxiliary window
+  was not admitted. The exact requested document was identified by AXDocument;
+  AXMainWindow supplied its exact identity when AXWindows omitted it.
+- Helium followed the Example Domain link using AXPress. A subsequent observation
+  showed `iana.org/help/example-domains` and the title “Example Domains”.
+- TextEdit accepted an AXValue write, returned `effect: confirmed` with value
+  readback, and a subsequent observation contained the full written note.
+- TextEdit process keyboard delivery remained refused as ambiguous. After its
+  window became unavailable, workspace state reported `stale_or_unavailable`.
+- The corrected generated MCP configuration initialized and advertised 64 tools,
+  including `launch_workspace_app`, without any fixture window IDs.
+
+Evidence directories include `1788783289397713000` (browser navigation and an
+exact-window PNG) and `1788784445945127000` (both app launches, notes write/readback,
+browser navigation, stale-window state). Recent captures timed out or returned
+`ScreenCaptureKit capture already in flight`; reliable capture of these newly
+launched inactive windows is **not established**. No display capture or foreground
+fallback was substituted. Apps/desktops remain for explicit user cleanup.
+
+Focused validation: 599 core, 32 contract, 52 SDK and 361 macOS unit tests passed
+(two native macOS tests ignored). Canonical Rust manifest and UniFFI Python/TS
+bindings regenerated; TypeScript typecheck passed. The new repository testkit
+scenario `workspace_apps_macos_test` compiled. Its daemon-backed native run stopped
+at `workspace_permission_required: Accessibility permission is required`, before
+creating a desktop: the independently responsible daemon lacks the permission
+identity inherited by the working direct MCP process. This is a failed/blocked
+native gate, not a pass. No system permission was changed to bypass it.
+
+The full macOS Lume/installed-browser gate remains unrun because no Lume environment
+was supplied and testing was restricted to this Mac. Windows/Linux native gates,
+23-app concurrency, reliable inactive capture, and an independent human-typing
+oracle remain unverified. Earlier evidence below is historical and does not
+override these latest results.
