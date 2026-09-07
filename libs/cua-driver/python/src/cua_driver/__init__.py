@@ -49,6 +49,7 @@ from ._native import (
 )
 from ._native_contract import (
     CreateWorkspaceInput,
+    LaunchWorkspaceAppInput,
     GetWorkspaceStateInput,
     MoveWindowToWorkspaceInput,
     RevealWorkspaceInput,
@@ -179,6 +180,7 @@ CuaDriver = _NativeCuaDriver
 
 __all__ = [
     "CreateWorkspaceInput",
+    "LaunchWorkspaceAppInput",
     "GetWorkspaceStateInput",
     "MoveWindowToWorkspaceInput",
     "RevealWorkspaceInput",

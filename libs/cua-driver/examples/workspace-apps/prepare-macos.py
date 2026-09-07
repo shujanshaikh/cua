@@ -54,7 +54,7 @@ def main():
             "move_window_to_workspace", "reveal_workspace", "restore_workspace_windows",
             "release_workspace", "delete_workspace", "list_windows", "list_apps",
             "get_window_state", "click", "double_click", "right_click", "scroll", "drag",
-            "set_value", "type_text", "press_key", "hotkey", "wait",
+            "set_value", "type_text", "press_key", "hotkey",
             "start_recording", "get_recording_state", "stop_recording", "end_session",
         ]},
     }
