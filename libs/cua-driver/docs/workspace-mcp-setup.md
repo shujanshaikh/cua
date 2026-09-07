@@ -82,6 +82,20 @@ workspace launch. Global desktop input, foreground menu invocation, and other
 operations without an exact-window boundary remain unavailable. These refusals
 protect the user's active desktop; enabling an app does not waive them.
 
+Workspace launch admission checks the new process's foreground identity and the
+normal launcher's focus-suppression result after launch and after waiting for its
+window. A change to another foreground app or active Space alone does not reject
+the launch. macOS desktop snapshots cannot attribute a Space change to the user
+or an app, and these checks do not certify uninterrupted background operation.
+The normal launcher's focus suppression remains in place.
+
+Successful normal launches include `workspace_launch_focus` with foreground PIDs
+and active Spaces before launch, after launch, and after window discovery. Focus
+refusals report the check stage, created PID, suppression result, and before/after
+snapshots. A refused process remains untouched and unauthorized; its PID is
+provided for inspection, not as an input grant. Do not blindly retry a launch
+that already created a process.
+
 ## Lifetime
 
 Normal sessions retain their existing idle cleanup policy. While an MCP session

@@ -74,7 +74,7 @@ fn launch_verified(
     bundle_id: &str,
     urls: &[String],
 ) -> Result<(LaunchedWorkspaceWindow, Value), String> {
-    let active_before = active_spaces()?;
+    let focus_before = LaunchFocus::capture()?;
     // Read kernel process identities, avoiding NSWorkspace's cached app list.
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     if count <= 0 {
@@ -91,7 +91,6 @@ fn launch_verified(
         return Err("workspace_launch_failed: process inventory incomplete".into());
     }
     let before: HashSet<_> = pids.into_iter().take(count as usize).collect();
-    let frontmost = crate::apps::frontmost_pid();
     let result = tokio::runtime::Handle::current()
         .block_on(crate::tools::launch_app::LaunchAppTool.launch_workspace(args));
     if result.is_error == Some(true) {
@@ -123,9 +122,10 @@ fn launch_verified(
                 .into(),
         );
     }
-    if crate::apps::frontmost_pid() != frontmost || active_spaces()? != active_before {
-        return Err(format!("workspace_launch_background_failed: foreground changed during launch; created pid {pid} left untouched and unauthorized"));
-    }
+    let suppressed = data
+        .get("self_activation_suppressed")
+        .and_then(Value::as_bool);
+    let after_launch = check_launch_focus(pid, suppressed, &focus_before, "after_launch")?;
     // NSWorkspace's runningApplications list can remain cached in a direct
     // MCP process. Resolve this exact PID rather than polling that list.
     if crate::apps::bundle_id_for_pid(pid).as_deref() != Some(bundle_id) {
@@ -145,9 +145,13 @@ fn launch_verified(
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     };
-    if crate::apps::frontmost_pid() != frontmost || active_spaces()? != active_before {
-        return Err(format!("workspace_launch_background_failed: foreground changed while waiting for pid {pid}; no window access granted"));
-    }
+    let after_windows = check_launch_focus(pid, suppressed, &focus_before, "after_windows")?;
+    let mut data = data.clone();
+    data["workspace_launch_focus"] = json!({
+        "before": focus_before,
+        "after_launch": after_launch,
+        "after_windows": after_windows,
+    });
     if windows.is_empty() {
         return Err(format!("workspace_launch_no_window: created pid {pid} did not expose a background window; the app may require activation, which this workspace will not perform"));
     }
@@ -171,7 +175,7 @@ fn launch_verified(
             }
         }
         if matches.len() == 1 {
-            return Ok((matches.remove(0), data.clone()));
+            return Ok((matches.remove(0), data));
         }
         return Err(format!("workspace_launch_ambiguous: created pid {pid} has no unique exact document window; no windows approved"));
     }
@@ -183,7 +187,60 @@ fn launch_verified(
         window_id: u64::from(windows[0].window_id),
     };
     let identity = crate::selected_windows::MacosWindowSelection.bind(target)?;
-    Ok((LaunchedWorkspaceWindow { target, identity }, data.clone()))
+    Ok((LaunchedWorkspaceWindow { target, identity }, data))
+}
+
+/// Desktop snapshots are diagnostics, not ownership evidence. A user can change
+/// apps or Spaces during a background launch without invalidating the new window.
+#[derive(Debug, serde::Serialize)]
+struct LaunchFocus {
+    frontmost_pid: Option<i32>,
+    active_spaces: Vec<(String, u64)>,
+}
+
+impl LaunchFocus {
+    fn capture() -> Result<Self, String> {
+        Ok(Self {
+            frontmost_pid: crate::apps::frontmost_pid(),
+            active_spaces: active_spaces()?,
+        })
+    }
+
+    fn refusal(&self, pid: i32, suppressed: Option<bool>) -> Option<&'static str> {
+        if self.frontmost_pid == Some(pid) {
+            Some("launched app is foreground")
+        } else if suppressed == Some(false) {
+            Some("native launcher reported failed focus suppression")
+        } else if self.frontmost_pid.is_none() {
+            Some("foreground app identity is unavailable")
+        } else {
+            None
+        }
+    }
+}
+
+fn check_launch_focus(
+    pid: i32,
+    suppressed: Option<bool>,
+    before: &LaunchFocus,
+    stage: &str,
+) -> Result<LaunchFocus, String> {
+    let after = LaunchFocus::capture().map_err(|error| {
+        format!("workspace_launch_background_failed: {error}; created pid {pid} left untouched and unauthorized; stage={stage}")
+    })?;
+    let diagnostics = json!({
+        "pid": pid,
+        "stage": stage,
+        "before": before,
+        "after": after,
+        "self_activation_suppressed": suppressed,
+    });
+    if let Some(reason) = after.refusal(pid, suppressed) {
+        tracing::warn!(%diagnostics, reason, "Workspace launch admission refused");
+        return Err(format!("workspace_launch_background_failed: {reason}; created pid {pid} left untouched and unauthorized; diagnostics={diagnostics}"));
+    }
+    tracing::debug!(%diagnostics, "Workspace launch focus checked");
+    Ok(after)
 }
 
 fn active_spaces() -> Result<Vec<(String, u64)>, String> {
@@ -205,4 +262,58 @@ fn active_spaces() -> Result<Vec<(String, u64)>, String> {
     }
     active.sort();
     Ok(active)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unrelated_app_and_space_changes_do_not_refuse_background_launch() {
+        let before = LaunchFocus {
+            frontmost_pid: Some(7),
+            active_spaces: vec![("display".into(), 10)],
+        };
+        for after in [
+            LaunchFocus {
+                frontmost_pid: Some(8),
+                active_spaces: before.active_spaces.clone(),
+            },
+            LaunchFocus {
+                frontmost_pid: Some(7),
+                active_spaces: vec![("display".into(), 11)],
+            },
+            LaunchFocus {
+                frontmost_pid: Some(8),
+                active_spaces: vec![("display".into(), 11)],
+            },
+        ] {
+            assert_eq!(after.refusal(42, Some(true)), None);
+        }
+    }
+
+    #[test]
+    fn target_activation_failed_suppression_and_unknown_focus_still_refuse() {
+        let mut focus = LaunchFocus {
+            frontmost_pid: Some(42),
+            active_spaces: vec![],
+        };
+        assert_eq!(
+            focus.refusal(42, Some(true)),
+            Some("launched app is foreground")
+        );
+        focus.frontmost_pid = Some(7);
+        assert_eq!(
+            focus.refusal(42, Some(false)),
+            Some("native launcher reported failed focus suppression")
+        );
+        focus.frontmost_pid = None;
+        assert_eq!(
+            focus.refusal(42, Some(true)),
+            Some("foreground app identity is unavailable")
+        );
+        // The normal launcher can omit suppression if there was no prior app.
+        focus.frontmost_pid = Some(7);
+        assert_eq!(focus.refusal(42, None), None);
+    }
 }
