@@ -699,7 +699,7 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), serde_json::to_vec(&json!({
             "version":3,"resources":{"apps":[{"bundle_id":"com.test.app","launch":true}],"desktop":{"workspace_launch_apps":true,"workspace_applications":{"notes":{"bundle_id":"com.test.app"}},"selected_windows_only":true,"workspace_only":true,"windows":windows,"workspace_space_id":100}},
-            "allow":{"tools":["launch_app","list_apps","launch_workspace_app","create_workspace","get_workspace_state","move_window_to_workspace","reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace","end_session","list_windows"]}
+            "allow":{"tools":["get_window_state","get_browser_state","click","type_text","launch_app","list_apps","launch_workspace_app","create_workspace","get_workspace_state","move_window_to_workspace","reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace","end_session","list_windows"]}
         })).unwrap()).unwrap();
         let manifest = Arc::new(crate::session_manifest::load_manifest(file.path()).unwrap());
         let (host, connection) = registry.trusted_in_process_binding();
@@ -729,7 +729,7 @@ mod tests {
             static DEF: std::sync::LazyLock<ToolDef> = std::sync::LazyLock::new(|| ToolDef {
                 name: "launch_app".into(),
                 description: "Normal launcher".into(),
-                input_schema: json!({"type":"object","properties":{"name":{"type":"string"},"urls":{"type":"array","items":{"type":"string"}}}}),
+                input_schema: json!({"type":"object","properties":{"name":{"type":"string"},"urls":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}),
                 read_only: false,
                 destructive: false,
                 idempotent: false,
@@ -740,6 +740,287 @@ mod tests {
         async fn invoke(&self, _: Value) -> ToolResult {
             panic!("workspace launch must never reach the unscoped launcher")
         }
+    }
+
+    struct WorkspaceMcp {
+        tools: ToolRegistry,
+        named: Arc<EffectiveAuthorizationContext>,
+        unnamed: Arc<EffectiveAuthorizationContext>,
+    }
+    #[async_trait]
+    impl crate::server::ToolProvider for WorkspaceMcp {
+        fn tools_list(&self) -> Value {
+            self.tools.tools_list()
+        }
+        async fn invoke_tool(&self, name: &str, args: Value) -> Result<Value, String> {
+            let public = args.get("session").and_then(Value::as_str);
+            assert_eq!(args["_session_id"], public.unwrap_or("mcp-connection"));
+            assert_eq!(args["_transport_session_id"], "mcp-connection");
+            let context = if public == Some("mcp-workspace") {
+                self.named.clone()
+            } else {
+                self.unnamed.clone()
+            };
+            serde_json::to_value(self.tools.invoke_with_context(name, args, context).await)
+                .map_err(|e| e.to_string())
+        }
+    }
+
+    async fn mcp_request(provider: &WorkspaceMcp, method: &str, params: Value) -> Value {
+        let request =
+            serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
+                .unwrap();
+        let response = crate::server::handle_request_with_transport_session(
+            request,
+            json!(1),
+            provider,
+            "mcp-connection",
+        )
+        .await;
+        match response.body {
+            crate::protocol::ResponseBody::Result { result } => result,
+            other => panic!("unexpected MCP failure: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_launch_schema_and_calls_preserve_named_workspace_ownership() {
+        let native = Arc::new(Native::default());
+        let auth = SessionAuthorizationRegistry::with_ceiling(
+            SessionModeCeiling::for_trusted_sessions(
+                [PermissionMode::Standard],
+                false,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
+        let named = context(&auth, "mcp-workspace", &[]);
+        let unnamed = context(&auth, "implicit", &[]);
+        let mut tools = ToolRegistry::new();
+        tools.set_window_selection_backend(native.clone());
+        tools.set_workspace_backend(native.clone());
+        tools.register(Box::new(NormalLaunch));
+        tools.register_session_tools();
+        tools.bind_selected_windows(&named).unwrap();
+        tools.bind_selected_windows(&unnamed).unwrap();
+        let provider = WorkspaceMcp {
+            tools,
+            named,
+            unnamed,
+        };
+        let listing = mcp_request(&provider, "tools/list", json!({})).await;
+        let schema = &listing["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "launch_app")
+            .unwrap()["inputSchema"];
+        assert_eq!(schema["properties"]["session"]["type"], "string");
+        let validator = jsonschema::validator_for(schema).unwrap();
+        let args = json!({"session":"mcp-workspace","name":"Zed","urls":["/project"]});
+        assert!(validator.is_valid(&args));
+        assert!(!validator.is_valid(&json!({"session":42,"name":"Zed"})));
+        let created = mcp_request(
+            &provider,
+            "tools/call",
+            json!({"name":"create_workspace","arguments":{"session":"mcp-workspace"}}),
+        )
+        .await;
+        assert_ne!(created["isError"], true, "{created}");
+        let anonymous = mcp_request(
+            &provider,
+            "tools/call",
+            json!({"name":"launch_app","arguments":{"name":"Zed","urls":["/project"]}}),
+        )
+        .await;
+        assert_eq!(anonymous["isError"], true);
+        assert_eq!(
+            native
+                .launch_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        let launched = mcp_request(
+            &provider,
+            "tools/call",
+            json!({"name":"launch_app","arguments":args}),
+        )
+        .await;
+        assert_ne!(launched["isError"], true, "{launched}");
+        assert_eq!(launched["structuredContent"]["workspace_space_id"], 100);
+        let state = mcp_request(
+            &provider,
+            "tools/call",
+            json!({"name":"get_workspace_state","arguments":{"session":"mcp-workspace"}}),
+        )
+        .await;
+        assert_eq!(state["structuredContent"]["windows"][0]["window_id"], 51);
+        let other = mcp_request(
+            &provider,
+            "tools/call",
+            json!({"name":"get_workspace_state","arguments":{}}),
+        )
+        .await;
+        assert_eq!(other["structuredContent"]["owned"], false);
+    }
+
+    struct WorkspaceInteraction {
+        def: ToolDef,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    #[async_trait]
+    impl Tool for WorkspaceInteraction {
+        fn def(&self) -> &ToolDef {
+            &self.def
+        }
+        async fn invoke(&self, _: Value) -> ToolResult {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ToolResult::text("observed or interacted with exact window")
+        }
+    }
+
+    #[tokio::test]
+    async fn launched_workspace_window_can_be_observed_and_used_but_not_shared() {
+        let native = Arc::new(Native::default());
+        let auth = SessionAuthorizationRegistry::with_ceiling(
+            SessionModeCeiling::for_trusted_sessions(
+                [PermissionMode::Standard],
+                false,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
+        let selected = context(&auth, "interact", &[]);
+        let other = context(&auth, "other-interact", &[]);
+        let mut tools = ToolRegistry::new();
+        tools.set_window_selection_backend(native.clone());
+        tools.set_workspace_backend(native.clone());
+        tools.register(Box::new(NormalLaunch));
+        tools.register_session_tools();
+        tools.bind_selected_windows(&selected).unwrap();
+        tools.bind_selected_windows(&other).unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for name in [
+            "get_window_state",
+            "get_browser_state",
+            "click",
+            "type_text",
+        ] {
+            tools.register(Box::new(WorkspaceInteraction {
+                def: ToolDef {
+                    name: name.into(),
+                    description: "Exact window interaction".into(),
+                    input_schema: json!({"type":"object"}),
+                    read_only: name.starts_with("get_"),
+                    destructive: false,
+                    idempotent: false,
+                    open_world: false,
+                },
+                calls: calls.clone(),
+            }));
+        }
+        for (name, args) in [
+            ("create_workspace", json!({"session":"interact"})),
+            (
+                "launch_app",
+                json!({"session":"interact","name":"Zed","urls":["/project"]}),
+            ),
+        ] {
+            let result = tools
+                .invoke_with_context(name, args, selected.clone())
+                .await;
+            assert_ne!(result.is_error, Some(true), "{result:?}");
+        }
+        // The actual native target was minted after the manifest was loaded.
+        assert!(selected
+            .capability_manifest()
+            .unwrap()
+            .authorize_protected_resource(
+                "private_observation",
+                &json!({"kind":"window","pid":50,"window_id":51})
+            )
+            .is_err());
+        for name in [
+            "get_window_state",
+            "get_browser_state",
+            "click",
+            "type_text",
+        ] {
+            let args = json!({"session":"interact","pid":50,"window_id":51,"text":"hello"});
+            let result = tools
+                .invoke_with_context(name, args.clone(), selected.clone())
+                .await;
+            assert_ne!(result.is_error, Some(true), "{name}: {result:?}");
+            let count = calls.load(std::sync::atomic::Ordering::SeqCst);
+            let mut denied_args = vec![json!({"session":"interact","pid":50,"window_id":999})];
+            // Initial browser binding is observation-only and has no delivery mode.
+            if name != "get_browser_state" {
+                denied_args.push(json!({"session":"interact","pid":50,"window_id":51,"delivery_mode":"foreground"}));
+            }
+            for denied in denied_args {
+                assert_eq!(
+                    tools
+                        .invoke_with_context(name, denied, selected.clone())
+                        .await
+                        .is_error,
+                    Some(true)
+                );
+            }
+            assert_eq!(
+                tools
+                    .invoke_with_context(
+                        name,
+                        json!({"session":"other-interact","pid":50,"window_id":51}),
+                        other.clone()
+                    )
+                    .await
+                    .is_error,
+                Some(true)
+            );
+            native.membership.lock().unwrap().insert(
+                WindowTarget {
+                    pid: 50,
+                    window_id: 51,
+                },
+                vec![1],
+            );
+            assert_eq!(
+                tools
+                    .invoke_with_context(name, args, selected.clone())
+                    .await
+                    .is_error,
+                Some(true)
+            );
+            native.membership.lock().unwrap().insert(
+                WindowTarget {
+                    pid: 50,
+                    window_id: 51,
+                },
+                vec![100],
+            );
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), count);
+        }
+        let ended = tools
+            .invoke_with_context(
+                "end_session",
+                json!({"session":"interact"}),
+                selected.clone(),
+            )
+            .await;
+        assert_ne!(ended.is_error, Some(true), "{ended:?}");
+        assert_eq!(
+            tools
+                .invoke_with_context(
+                    "get_window_state",
+                    json!({"session":"interact","pid":50,"window_id":51}),
+                    selected
+                )
+                .await
+                .is_error,
+            Some(true)
+        );
     }
 
     #[tokio::test]

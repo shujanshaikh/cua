@@ -53,7 +53,14 @@ arguments. Workspace mode forces a fresh process, verifies its identity and new
 window, moves that window, and verifies membership before returning success.
 The response keeps the normal app metadata and adds `window_id` and
 `workspace_space_id`. Only admitted windows appear in its `windows` list.
-All observations and input use the returned PID/window ID. `list_windows` remains
+Repeat the same `session` on `launch_app` and subsequent window/browser calls.
+`launch_app` exposes this optional field in MCP on every platform. Omitting it
+uses the connection's unnamed session, which does not inherit a named workspace.
+All observations and input use the returned PID/window ID. The shared resource
+authorization layer accepts the session's live launch grant for exact-window
+observation and background input. It rechecks native lifetime and workspace
+membership on each authorization; no static window-ID entry or process-wide app
+grant is needed for a newly launched workspace window. `list_windows` remains
 workspace-filtered; `list_apps` includes installed apps so discovery works before
 launching. Keep the same session across follow-ups.
 

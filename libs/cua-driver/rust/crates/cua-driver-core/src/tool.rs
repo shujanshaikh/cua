@@ -240,6 +240,15 @@ impl ToolDef {
 
 fn advertised_runtime_input_schema(tool_name: &str, schema: &Value) -> Value {
     let mut schema = schema.clone();
+    // Launch session ownership is handled by the shared registry, not by the
+    // native launcher. Advertise it on every platform so MCP clients can route
+    // launches to the same named session that created their workspace.
+    if tool_name == "launch_app" && schema.get("type").and_then(Value::as_str) == Some("object") {
+        schema["properties"]["session"] = serde_json::json!({
+            "type": "string",
+            "description": "Session owning this launch. For a named workspace, pass the same session used by create_workspace. Omit only when using the connection's unnamed session."
+        });
+    }
     if !crate::action_target::supports_typed_target(tool_name) {
         return schema;
     }

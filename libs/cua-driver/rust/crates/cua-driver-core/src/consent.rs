@@ -373,9 +373,35 @@ impl ProtectedResourceGrants {
                 ))
             })?;
         if let Some(manifest) = context.capability_manifest() {
-            manifest
-                .authorize_protected_resource(adapter_id, &resource)
-                .map_err(ConsentError::BoundedResource)?;
+            let dynamic_workspace_window = manifest.workspace_only()
+                && matches!(
+                    (adapter_id, resource.get("kind").and_then(Value::as_str)),
+                    ("private_observation", Some("window"))
+                        | ("desktop_input", Some("window_input"))
+                )
+                && (adapter_id != "desktop_input"
+                    || resource
+                        .get("delivery_mode_ceiling")
+                        .and_then(Value::as_str)
+                        == Some("background"))
+                && context
+                    .selected_windows()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|selection| {
+                        crate::selected_windows::SelectedWindows::target(&resource)
+                            .ok()
+                            .is_some_and(|target| selection.is_live_launched_window(target))
+                    });
+            // Launch admission supplies runtime window identities that cannot
+            // exist in the immutable startup manifest. Recheck their lifetime
+            // and workspace membership on every observation/input authorization.
+            // This grants neither process-wide access nor other resource kinds.
+            if !dynamic_workspace_window {
+                manifest
+                    .authorize_protected_resource(adapter_id, &resource)
+                    .map_err(ConsentError::BoundedResource)?;
+            }
         }
         let profile_behavior = if adapter_id == "process_control"
             && context.mode() == PermissionMode::Standard
