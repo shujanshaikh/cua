@@ -189,6 +189,12 @@ pub(crate) fn background_refusal_result(
     window_id: u32,
     refusal: &cua_driver_core::background_input::BackgroundRefusal,
 ) -> cua_driver_core::protocol::ToolResult {
+    if cua_driver_core::tool::current_selected_observation_scope().is_some() {
+        let reason = "Exact background delivery could not be proven for this selected window. Refresh its state; foreground and process-wide fallback are unavailable.";
+        return cua_driver_core::protocol::ToolResult::error(format!("Background input refused ({}): {reason}", refusal.code))
+            .with_structured(serde_json::json!({"code":refusal.code,"effect":"refused","pid":pid,"window_id":window_id,"reason":reason}));
+    }
+
     let mut structured = serde_json::json!({
         "code": refusal.code,
         "effect": "refused",
@@ -719,8 +725,17 @@ impl Default for SessionConfigRegistry {
     }
 }
 
+#[derive(Clone)]
+struct SelectedObservation {
+    elements: Arc<ElementCache>,
+    zoom: Arc<ZoomRegistry>,
+    resize: Arc<ResizeRegistry>,
+}
+
 /// Shared state passed to all tools.
+#[derive(Clone)]
 pub struct ToolState {
+    selected_caches: Arc<std::sync::Mutex<std::collections::HashMap<String, SelectedObservation>>>,
     pub element_cache: Arc<ElementCache>,
     pub cursor_registry: Arc<CursorRegistry>,
     pub zoom_registry: Arc<ZoomRegistry>,
@@ -754,12 +769,36 @@ impl Default for ToolState {
 }
 
 impl ToolState {
+    fn for_call(self: &Arc<Self>) -> Arc<Self> {
+        let Some(scope) = cua_driver_core::tool::current_selected_observation_scope() else {
+            return self.clone();
+        };
+        let mut state = (**self).clone();
+        let observation = self
+            .selected_caches
+            .lock()
+            .unwrap()
+            .entry(scope)
+            .or_insert_with(|| SelectedObservation {
+                elements: Arc::new(ElementCache::new()),
+                zoom: Arc::new(ZoomRegistry::new()),
+                resize: Arc::new(ResizeRegistry::new()),
+            })
+            .clone();
+        state.element_cache = observation.elements;
+        state.zoom_registry = observation.zoom;
+        state.resize_registry = observation.resize;
+        crate::recording_hooks::set_element_cache(state.element_cache.clone());
+        Arc::new(state)
+    }
+
     fn new(
         cursor_overlay_available: bool,
         host_owns_permission_ux: bool,
         host_bundle_id: Option<String>,
     ) -> Self {
         Self {
+            selected_caches: Arc::default(),
             element_cache: Arc::new(ElementCache::new()),
             cursor_registry: Arc::new(CursorRegistry::new()),
             zoom_registry: Arc::new(ZoomRegistry::new()),
@@ -859,6 +898,14 @@ pub fn register_all(
     // Share the element cache with the recording-hook layer so it can
     // resolve element_index → window-local screenshot coords for click.png.
     crate::recording_hooks::set_element_cache(state.element_cache.clone());
+    let weak_state = Arc::downgrade(&state);
+    registry.retain_session_end_hook(cua_driver_core::session::register_scoped_session_end_hook(
+        move |session_id| {
+            if let Some(state) = weak_state.upgrade() {
+                state.selected_caches.lock().unwrap().remove(session_id);
+            }
+        },
+    ));
 
     // Drop a disconnecting session's config overrides + owned cursor on
     // `session_end`. The daemon fans the session id out to this hook;
@@ -886,6 +933,8 @@ pub fn register_all(
         registry.retain_session_revive_hook(revive_registration);
     }
 
+    registry.set_workspace_backend(Arc::new(crate::spaces::MacosWorkspaces));
+    registry.set_window_selection_backend(Arc::new(crate::selected_windows::MacosWindowSelection));
     registry.register(Box::new(list_apps::ListAppsTool));
     registry.register(Box::new(list_windows::ListWindowsTool));
     registry.register(Box::new(get_window_state::GetWindowStateTool::new(

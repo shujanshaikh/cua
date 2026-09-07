@@ -233,6 +233,7 @@ impl Tool for PressKeyTool {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
+        let call_state = self.state.for_call();
         use cua_driver_core::tool_args::ArgsExt;
         if args.opt_str("scope").as_deref() == Some("desktop")
             && args.get("pid").is_none()
@@ -332,7 +333,7 @@ impl Tool for PressKeyTool {
         // the element before the suppressed focus below dereferences it
         // (use-after-free → daemon crash). Guard lives to method end.
         let pre_focus_guard = if let (Some(idx), Some(wid)) = (element_index, window_id) {
-            match self.state.element_cache.get_element_retained(pid, wid, idx) {
+            match call_state.element_cache.get_element_retained(pid, wid, idx) {
                 Some(guard) => Some(guard),
                 None => {
                     return ToolResult::error(format!(
@@ -382,7 +383,7 @@ impl Tool for PressKeyTool {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 if let Err(e) = super::focus_by_pixel(
-                    &self.state,
+                    &call_state,
                     pid,
                     window_id,
                     cx,

@@ -172,6 +172,7 @@ impl Tool for GetWindowStateTool {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
+        let call_state = self.state.for_call();
         use cua_driver_core::tool_args::ArgsExt;
         let pid = match args.require_i32("pid") {
             Ok(v) => v,
@@ -224,8 +225,8 @@ impl Tool for GetWindowStateTool {
         // daemon injects `_session_id` for named MCP sessions; absent => global.
         let session_id = args.opt_str("_session_id");
         let effective_max_dim = {
-            let cfg = self.state.config.read().unwrap();
-            self.state
+            let cfg = call_state.config.read().unwrap();
+            call_state
                 .session_config
                 .effective_max_image_dimension(session_id.as_deref(), &cfg)
         };
@@ -297,14 +298,18 @@ impl Tool for GetWindowStateTool {
             // deadline so callers receive a structured driver error. The AX
             // walker also applies a native per-element messaging timeout because
             // dropping a spawn_blocking JoinHandle cannot cancel a blocked AX call.
+            let selected_window =
+                cua_driver_core::tool::current_selected_observation_scope().map(|_| window_id);
             let walk_future = tokio::task::spawn_blocking(move || {
-                crate::ax::tree::walk_tree_bounded(
-                    pid,
-                    Some(window_id),
-                    q.as_deref(),
-                    max_elements,
-                    max_depth,
-                )
+                crate::ax::tree::with_selected_window(selected_window, || {
+                    crate::ax::tree::walk_tree_bounded(
+                        pid,
+                        Some(window_id),
+                        q.as_deref(),
+                        max_elements,
+                        max_depth,
+                    )
+                })
             });
             match tokio::time::timeout(std::time::Duration::from_secs(20), walk_future).await {
                 Ok(Ok(r)) => Some(r),
@@ -346,9 +351,9 @@ impl Tool for GetWindowStateTool {
         if !observation_only {
             if let Some(ref r) = tree_result {
                 if scope_matched {
-                    self.state.element_cache.update(pid, window_id, &r.nodes);
+                    call_state.element_cache.update(pid, window_id, &r.nodes);
                 } else {
-                    self.state.element_cache.update(pid, window_id, &[]);
+                    call_state.element_cache.update(pid, window_id, &[]);
                 }
             }
         }
@@ -367,6 +372,7 @@ impl Tool for GetWindowStateTool {
         let mut screenshot_frame_error = None;
         let screenshot = if should_capture {
             let out_file = screenshot_out_file.clone();
+            let capture_context = cua_driver_core::tool::current_dispatch_authorization_context();
             let res = tokio::task::spawn_blocking(move || -> Result<
                 (
                     Option<String>,
@@ -383,7 +389,12 @@ impl Tool for GetWindowStateTool {
                 let bounds = crate::windows::window_bounds_by_id(window_id)
                     .filter(|b| b.width > 0.0 && b.height > 0.0)
                     .ok_or(super::px_frame::PxFrameError::WindowNotFound { window_id })?;
-                let raw = crate::capture::screenshot_window_bytes(window_id).map_err(|e| {
+                let capture = match capture_context.as_ref().map(|context| context.selected_windows()) {
+                    Some(Ok(Some(selection))) => crate::capture::screenshot_selected_window_bytes(window_id, pid, selection),
+                    Some(Err(error)) => Err(anyhow::anyhow!(error)),
+                    _ => crate::capture::screenshot_window_bytes(window_id),
+                };
+                let raw = capture.map_err(|e| {
                     super::px_frame::PxFrameError::CaptureUnavailable {
                         window_id,
                         reason: e.to_string(),
@@ -448,14 +459,14 @@ impl Tool for GetWindowStateTool {
                     if !observation_only {
                         if let Some(ow) = orig_w {
                             if w > 0 {
-                                self.state.resize_registry.set_ratio(
+                                call_state.resize_registry.set_ratio(
                                     pid,
                                     window_id,
                                     ow as f64 / w as f64,
                                 );
                             }
                         } else {
-                            self.state.resize_registry.clear_ratio(pid, window_id);
+                            call_state.resize_registry.clear_ratio(pid, window_id);
                         }
                     }
                     Some((b64, file_path, w, h, bounds, scale))
@@ -465,7 +476,7 @@ impl Tool for GetWindowStateTool {
                         "Screenshot frame could not be verified for window {window_id}: {e:?}"
                     );
                     if !observation_only {
-                        self.state.resize_registry.clear_ratio(pid, window_id);
+                        call_state.resize_registry.clear_ratio(pid, window_id);
                     }
                     screenshot_frame_error = Some(e);
                     None

@@ -189,9 +189,44 @@ pub struct EffectiveAuthorizationContext {
     last_authorized_dispatch: Option<Arc<Mutex<Instant>>>,
     idle_expired: Option<Arc<AtomicBool>>,
     revoked: Arc<AtomicBool>,
+    selected_windows: Arc<OnceLock<Arc<crate::selected_windows::SelectedWindows>>>,
 }
 
 impl EffectiveAuthorizationContext {
+    pub fn selected_windows(
+        &self,
+    ) -> Result<Option<&crate::selected_windows::SelectedWindows>, String> {
+        if self
+            .capability_manifest()
+            .and_then(SessionManifest::selected_window_targets)
+            .is_none()
+        {
+            return Ok(None);
+        }
+        self.selected_windows
+            .get()
+            .map(|windows| Some(windows.as_ref()))
+            .ok_or_else(|| {
+                "selected_window_unbound: trusted startup did not bind the native selection".into()
+            })
+    }
+
+    pub fn bind_selected_windows(
+        &self,
+        backend: &dyn crate::selected_windows::WindowSelectionBackend,
+    ) -> Result<(), String> {
+        let Some(targets) = self
+            .capability_manifest()
+            .and_then(SessionManifest::selected_window_targets)
+        else {
+            return Ok(());
+        };
+        let selection = crate::selected_windows::SelectedWindows::bind(&targets, backend)?;
+        self.selected_windows.set(Arc::new(selection)).map_err(|_| {
+            "selection is immutable; replace the trusted session to change access".into()
+        })
+    }
+
     /// Opaque process-local generation used to bind mutable runtime resources.
     ///
     /// This value is never serialized or accepted from caller input. Core
@@ -412,6 +447,8 @@ impl std::fmt::Debug for DelegatedSessionRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SessionAuthorizationError {
+    #[error("{0}")]
+    WindowSelection(String),
     #[error("the owning runtime is not accepting new sessions")]
     RuntimeUnavailable,
     #[error("trusted per-session mode delegation is not enabled for this daemon")]
@@ -558,6 +595,7 @@ impl SessionAuthorizationRegistry {
             last_authorized_dispatch: None,
             idle_expired: None,
             revoked: Arc::new(AtomicBool::new(false)),
+            selected_windows: Arc::new(OnceLock::new()),
         }))
     }
 
@@ -641,6 +679,7 @@ impl SessionAuthorizationRegistry {
             last_authorized_dispatch: Some(Arc::new(Mutex::new(Instant::now()))),
             idle_expired: Some(Arc::new(AtomicBool::new(false))),
             revoked: Arc::new(AtomicBool::new(false)),
+            selected_windows: Arc::new(OnceLock::new()),
         });
         state.by_connection.insert(connection.id, context);
         Ok(())
@@ -674,6 +713,27 @@ impl SessionAuthorizationRegistry {
             return Err(SessionAuthorizationError::SessionMismatch);
         }
         Ok(context)
+    }
+
+    /// Remove expired authority before the runtime performs lifecycle cleanup.
+    /// Native cleanup runs outside this registry's lock.
+    pub fn reap_expired_sessions(&self) -> Vec<String> {
+        let mut expired = Vec::new();
+        self.state
+            .lock()
+            .unwrap()
+            .by_connection
+            .retain(|_, context| {
+                if !context.is_expired() {
+                    return true;
+                }
+                context.revoked.store(true, Ordering::Release);
+                if let Some(session) = context.public_session() {
+                    expired.push(context.runtime_session_key(session));
+                }
+                false
+            });
+        expired
     }
 
     pub fn revoke_connection(&self, connection: &AuthenticatedActionConnection) -> bool {

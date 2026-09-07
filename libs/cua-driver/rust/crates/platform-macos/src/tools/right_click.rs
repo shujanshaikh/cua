@@ -83,6 +83,7 @@ impl Tool for RightClickTool {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
+        let call_state = self.state.for_call();
         use cua_driver_core::tool_args::ArgsExt;
         let pid = match args.require_i32("pid") {
             Ok(v) => v,
@@ -143,7 +144,7 @@ impl Tool for RightClickTool {
         if let (Some(idx), Some(wid)) = (element_index, window_id) {
             // Retain out of the cache so a concurrent get_window_state can't
             // free the element mid-action (use-after-free → daemon crash).
-            let element_guard = match self.state.element_cache.get_element_retained(pid, wid, idx) {
+            let element_guard = match call_state.element_cache.get_element_retained(pid, wid, idx) {
                 Some(e) => e,
                 None => {
                     return ToolResult::error(format!(
@@ -178,7 +179,7 @@ impl Tool for RightClickTool {
         // ── Pixel path ───────────────────────────────────────────────────────
         let (mut cx, mut cy) = (x.unwrap(), y.unwrap());
         // Scale back from downscaled-image space to native pixels when needed.
-        if let Some(ratio) = self.state.resize_registry.ratio(pid, window_id) {
+        if let Some(ratio) = call_state.resize_registry.ratio(pid, window_id) {
             cx *= ratio;
             cy *= ratio;
         }

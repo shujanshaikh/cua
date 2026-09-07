@@ -635,6 +635,13 @@ macro_rules! desktop_tool_methods {
             move_cursor: MoveCursorInput,
             set_window_frame: SetWindowFrameInput,
             invoke_menu: InvokeMenuInput,
+            create_workspace: cua_driver_contract::CreateWorkspaceInput,
+            get_workspace_state: cua_driver_contract::GetWorkspaceStateInput,
+            move_window_to_workspace: cua_driver_contract::MoveWindowToWorkspaceInput,
+            reveal_workspace: cua_driver_contract::RevealWorkspaceInput,
+            release_workspace: cua_driver_contract::ReleaseWorkspaceInput,
+            restore_workspace_windows: cua_driver_contract::RestoreWorkspaceWindowsInput,
+            delete_workspace: cua_driver_contract::DeleteWorkspaceInput,
             click: ClickInput,
             drag: DragInput,
             scroll: ScrollInput,
@@ -1540,6 +1547,26 @@ impl CuaDriverSession {
 }
 
 impl CuaDriverSession {
+    /// Trusted Rust embedding hook for Cua's existing experimental renderer.
+    /// Owns the backend until session end or replacement; never agent-callable.
+    /// The host must run the renderer's platform event loop.
+    pub fn attach_experimental_preview(
+        &self,
+        backend: Box<dyn pip_preview::PipBackend>,
+    ) -> Result<(), DriverError> {
+        match &self.backend {
+            SessionBackend::Embedded(session) => session.attach_preview(backend),
+            _ => {
+                backend.shutdown();
+                Err(DriverError::Configuration {
+                    reason:
+                        "session preview attachment is available only to the in-process Rust host"
+                            .into(),
+                })
+            }
+        }
+    }
+
     async fn invoke_typed<T: Serialize>(
         &self,
         name: &str,

@@ -861,7 +861,8 @@ fn advertised_enforcement_for(tool: &str) -> RiskEnforcement {
 pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
     let class = match tool {
         // Public driver/OS metadata with no user-content payload.
-        "get_screen_size"
+        "get_workspace_state"
+        | "get_screen_size"
         | "get_cursor_position"
         | "get_config"
         | "get_session"
@@ -874,7 +875,12 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
         | "probe" => RiskClass::R0,
 
         // Local reversible control and lifecycle operations.
-        "click"
+        "create_workspace"
+        | "move_window_to_workspace"
+        | "reveal_workspace"
+        | "release_workspace"
+        | "restore_workspace_windows"
+        | "click"
         | "double_click"
         | "right_click"
         | "drag"
@@ -925,7 +931,8 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
         | "history_query" => RiskClass::R2,
 
         // External/file side effects or generic compound action surfaces.
-        "get_desktop_state"
+        "delete_workspace"
+        | "get_desktop_state"
         | "get_window_state"
         | "kill_app"
         | "stop_recording"

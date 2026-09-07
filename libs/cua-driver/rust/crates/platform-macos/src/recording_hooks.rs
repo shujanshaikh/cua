@@ -21,8 +21,9 @@ use crate::ax::cache::ElementCache;
 static ELEMENT_CACHES: OnceLock<Mutex<HashMap<String, Weak<ElementCache>>>> = OnceLock::new();
 
 pub fn set_element_cache(cache: Arc<ElementCache>) {
-    let runtime_scope =
-        cua_driver_core::tool::current_dispatch_runtime_scope().unwrap_or_else(|| "legacy".into());
+    let runtime_scope = cua_driver_core::tool::current_selected_observation_scope()
+        .or_else(cua_driver_core::tool::current_dispatch_runtime_scope)
+        .unwrap_or_else(|| "legacy".into());
     let mut caches = ELEMENT_CACHES
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -40,7 +41,11 @@ pub fn app_state_json_for(window_id: Option<u64>, pid: Option<i64>) -> Option<Ve
         Some(w) => u32::try_from(w).ok()?,
         None => crate::windows::resolve_main_window_id(pid).ok()?,
     };
-    let result = crate::ax::tree::walk_tree(pid, Some(resolved_wid), None);
+    let selected =
+        cua_driver_core::tool::current_selected_observation_scope().map(|_| resolved_wid);
+    let result = crate::ax::tree::with_selected_window(selected, || {
+        crate::ax::tree::walk_tree(pid, Some(resolved_wid), None)
+    });
     let element_count = result
         .nodes
         .iter()
@@ -60,8 +65,9 @@ pub fn app_state_json_for(window_id: Option<u64>, pid: Option<i64>) -> Option<Ve
 /// by subtracting the window's screen origin and multiplying by the
 /// screenshot's pixels-per-point scale.
 pub fn element_window_local_xy(window_id: u64, pid: i64, element_index: u32) -> Option<(f64, f64)> {
-    let runtime_scope =
-        cua_driver_core::tool::current_dispatch_runtime_scope().unwrap_or_else(|| "legacy".into());
+    let runtime_scope = cua_driver_core::tool::current_selected_observation_scope()
+        .or_else(cua_driver_core::tool::current_dispatch_runtime_scope)
+        .unwrap_or_else(|| "legacy".into());
     let cache = ELEMENT_CACHES
         .get()?
         .lock()

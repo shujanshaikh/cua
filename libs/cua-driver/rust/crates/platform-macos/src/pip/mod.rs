@@ -42,7 +42,8 @@
 //! `Mutex<Option<usize>>` and silently no-ops until init finishes.
 
 use std::ffi::c_void;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use pip_preview::{PipBackend, PipBackendFactory, PipConfig, PipFrame};
 
@@ -82,7 +83,11 @@ struct NativeHandles {
     label: usize,
 }
 
-static HANDLES: Mutex<Option<NativeHandles>> = Mutex::new(None);
+#[derive(Default)]
+struct PreviewState {
+    handles: Mutex<Option<NativeHandles>>,
+    closed: AtomicBool,
+}
 
 // ── libdispatch glue — same shape as cursor::overlay ──────────────────────
 
@@ -106,21 +111,25 @@ fn dispatch_to_main<T: Send + 'static>(payload: T, cb: unsafe extern "C" fn(*mut
 
 // ── Backend impl ──────────────────────────────────────────────────────────
 
-pub struct MacosPipBackend;
+pub struct MacosPipBackend {
+    state: Arc<PreviewState>,
+}
 
 impl PipBackend for MacosPipBackend {
     fn push_frame(&self, frame: PipFrame) {
         // No window yet? Drop the frame silently — start() dispatches
         // the create block onto the main queue and the very first
         // tool call can race that block.
-        if HANDLES.lock().unwrap().is_none() {
+        if self.state.closed.load(Ordering::Acquire) || self.state.handles.lock().unwrap().is_none()
+        {
             return;
         }
-        dispatch_to_main(frame, push_frame_cb);
+        dispatch_to_main((self.state.clone(), frame), push_frame_cb);
     }
 
     fn shutdown(self: Box<Self>) {
-        dispatch_to_main((), shutdown_cb);
+        self.state.closed.store(true, Ordering::Release);
+        dispatch_to_main(self.state.clone(), shutdown_cb);
     }
 }
 
@@ -128,10 +137,13 @@ unsafe extern "C" fn push_frame_cb(ctx: *mut c_void) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
 
-    let frame: PipFrame = *Box::from_raw(ctx as *mut PipFrame);
+    let (state, frame) = *Box::from_raw(ctx as *mut (Arc<PreviewState>, PipFrame));
+    if state.closed.load(Ordering::Acquire) {
+        return;
+    }
 
     let (image_view_ptr, label_ptr) = {
-        let guard = HANDLES.lock().unwrap();
+        let guard = state.handles.lock().unwrap();
         match guard.as_ref() {
             Some(h) => (h.image_view, h.label),
             None => return,
@@ -158,6 +170,7 @@ unsafe extern "C" fn push_frame_cb(ctx: *mut c_void) {
     if !img.is_null() {
         let image_view = image_view_ptr as *mut AnyObject;
         let _: () = msg_send![image_view, setImage: img];
+        let _: () = msg_send![img, release];
     }
 
     // Update the label. NSString::stringWithUTF8String requires NUL
@@ -174,16 +187,20 @@ unsafe extern "C" fn push_frame_cb(ctx: *mut c_void) {
     }
 }
 
-unsafe extern "C" fn shutdown_cb(_ctx: *mut c_void) {
+unsafe extern "C" fn shutdown_cb(ctx: *mut c_void) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
 
-    let handles = HANDLES.lock().unwrap().take();
+    let state = *Box::from_raw(ctx as *mut Arc<PreviewState>);
+    let handles = state.handles.lock().unwrap().take();
     if let Some(h) = handles {
         let win = h.window as *mut AnyObject;
         if !win.is_null() {
             let _: () = msg_send![win, orderOut: std::ptr::null_mut::<AnyObject>()];
+            let image_view = h.image_view as *mut AnyObject;
+            let _: () = msg_send![image_view, setImage: std::ptr::null_mut::<AnyObject>()];
             let _: () = msg_send![win, close];
+            let _: () = msg_send![win, release];
         }
     }
 }
@@ -228,8 +245,9 @@ impl PipBackendFactory for MacosPipBackendFactory {
         // few frames may be dropped while init races, which is fine
         // for a live-preview UX.
         let cfg_clone = cfg.clone();
-        dispatch_to_main(cfg_clone, init_cb);
-        Ok(Box::new(MacosPipBackend))
+        let state = Arc::new(PreviewState::default());
+        dispatch_to_main((state.clone(), cfg_clone), init_cb);
+        Ok(Box::new(MacosPipBackend { state }))
     }
 }
 
@@ -238,11 +256,10 @@ unsafe extern "C" fn init_cb(ctx: *mut c_void) {
     use objc2::{class, msg_send};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
-    let cfg: PipConfig = *Box::from_raw(ctx as *mut PipConfig);
+    let (state, cfg) = *Box::from_raw(ctx as *mut (Arc<PreviewState>, PipConfig));
 
-    // Idempotency guard — `start()` should only be called once per
-    // process, but cheap to defend against duplicate calls.
-    if HANDLES.lock().unwrap().is_some() {
+    // A session may end while creation is queued on the AppKit main thread.
+    if state.closed.load(Ordering::Acquire) || state.handles.lock().unwrap().is_some() {
         return;
     }
 
@@ -411,11 +428,15 @@ unsafe extern "C" fn init_cb(ctx: *mut c_void) {
     let _: () = msg_send![content_view, addSubview: image_view];
     let _: () = msg_send![pill, addSubview: label];
     let _: () = msg_send![content_view, addSubview: pill];
+    // The view hierarchy now owns these allocations.
+    let _: () = msg_send![image_view, release];
+    let _: () = msg_send![label, release];
+    let _: () = msg_send![pill, release];
 
     // Show the window without making it key or activating the app.
     let _: () = msg_send![win, orderFrontRegardless];
 
-    *HANDLES.lock().unwrap() = Some(NativeHandles {
+    *state.handles.lock().unwrap() = Some(NativeHandles {
         window: win as usize,
         image_view: image_view as usize,
         label: label as usize,

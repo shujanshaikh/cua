@@ -122,6 +122,7 @@ impl Tool for ScrollTool {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
+        let call_state = self.state.for_call();
         use cua_driver_core::tool_args::ArgsExt;
         if args.opt_str("scope").as_deref() == Some("desktop")
             && args.get("pid").is_none()
@@ -217,7 +218,7 @@ impl Tool for ScrollTool {
         // the element before the suppressed focus below dereferences it
         // (use-after-free → daemon crash). Guard lives to method end.
         let pre_focus_guard = if let (Some(idx), Some(wid)) = (element_index, window_id) {
-            self.state.element_cache.get_element_retained(pid, wid, idx)
+            call_state.element_cache.get_element_retained(pid, wid, idx)
         } else {
             None
         };
@@ -267,8 +268,7 @@ impl Tool for ScrollTool {
                         }
                     }
                 }
-                let native_element_guard = self
-                    .state
+                let native_element_guard = call_state
                     .element_cache
                     .get_element_retained(pid, wid, index);
                 let direction_for_ax = direction.clone();
@@ -451,7 +451,7 @@ impl Tool for ScrollTool {
             // click pixel path — undo any session downscale, then translate
             // through the shared window frame (which refuses a window with no
             // live frame rather than scrolling at screen-absolute coords).
-            if let Some(ratio) = self.state.resize_registry.ratio(pid, window_id) {
+            if let Some(ratio) = call_state.resize_registry.ratio(pid, window_id) {
                 cx *= ratio;
                 cy *= ratio;
             }
@@ -537,7 +537,7 @@ impl Tool for ScrollTool {
                 target.screen_y,
             )
             .await;
-            self.state.cursor_registry.update_position(
+            call_state.cursor_registry.update_position(
                 &cursor_key,
                 target.screen_x,
                 target.screen_y,

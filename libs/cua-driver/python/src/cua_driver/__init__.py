@@ -48,6 +48,15 @@ from ._native import (
     request_mac_os_permissions,
 )
 from ._native_contract import (
+    CreateWorkspaceInput,
+    GetWorkspaceStateInput,
+    MoveWindowToWorkspaceInput,
+    RevealWorkspaceInput,
+    ReleaseWorkspaceInput,
+    RestoreWorkspaceWindowsInput,
+    DeleteWorkspaceInput,
+    WorkspaceWindowState,
+    WorkspaceStateOutput,
     ActionDelivery,
     ActionDeliveryMode,
     ActionEffect,
@@ -169,6 +178,15 @@ _NativeCuaDriver.create_private_worker = classmethod(_create_private_worker_pyth
 CuaDriver = _NativeCuaDriver
 
 __all__ = [
+    "CreateWorkspaceInput",
+    "GetWorkspaceStateInput",
+    "MoveWindowToWorkspaceInput",
+    "RevealWorkspaceInput",
+    "ReleaseWorkspaceInput",
+    "RestoreWorkspaceWindowsInput",
+    "DeleteWorkspaceInput",
+    "WorkspaceWindowState",
+    "WorkspaceStateOutput",
     "ActionCompletion",
     "ActionDelivery",
     "ActionDeliveryMode",

@@ -2145,6 +2145,36 @@ class _UniffiFfiConverterTypeClipboardWriteOutput(_UniffiConverterRustBuffer):
         _UniffiFfiConverterBoolean.write(value.content_redacted_from_telemetry, buf)
 
 @dataclass
+class CreateWorkspaceInput:
+    def __init__(self, *, session:typing.Optional[str]):
+        self.session = session
+
+
+
+
+    def __str__(self):
+        return "CreateWorkspaceInput(session={})".format(self.session)
+    def __eq__(self, other):
+        if self.session != other.session:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeCreateWorkspaceInput(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return CreateWorkspaceInput(
+            session=_UniffiFfiConverterOptionalString.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterOptionalString.check_lower(value.session)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterOptionalString.write(value.session, buf)
+
+@dataclass
 class CursorMotionOutput:
     def __init__(self, *, start_handle:float, end_handle:float, arc_size:float, arc_flow:float, spring:float, glide_duration_ms:float, dwell_after_click_ms:float, idle_hide_ms:float, turn_radius:float):
         self.start_handle = start_handle
@@ -2575,6 +2605,36 @@ class _UniffiFfiConverterTypeCursorVisualOutput(_UniffiConverterRustBuffer):
         _UniffiFfiConverterString.write(value.phase, buf)
         _UniffiFfiConverterUInt64.write(value.frame, buf)
         _UniffiFfiConverterUInt64.write(value.preempted_count, buf)
+
+@dataclass
+class DeleteWorkspaceInput:
+    def __init__(self, *, session:typing.Optional[str]):
+        self.session = session
+
+
+
+
+    def __str__(self):
+        return "DeleteWorkspaceInput(session={})".format(self.session)
+    def __eq__(self, other):
+        if self.session != other.session:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeDeleteWorkspaceInput(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return DeleteWorkspaceInput(
+            session=_UniffiFfiConverterOptionalString.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterOptionalString.check_lower(value.session)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterOptionalString.write(value.session, buf)
 
 class _UniffiFfiConverterOptionalUInt64(_UniffiConverterRustBuffer):
     @classmethod
@@ -3278,6 +3338,36 @@ class _UniffiFfiConverterTypeGetSessionStateInput(_UniffiConverterRustBuffer):
         _UniffiFfiConverterOptionalString.write(value.session, buf)
 
 @dataclass
+class GetWorkspaceStateInput:
+    def __init__(self, *, session:typing.Optional[str]):
+        self.session = session
+
+
+
+
+    def __str__(self):
+        return "GetWorkspaceStateInput(session={})".format(self.session)
+    def __eq__(self, other):
+        if self.session != other.session:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeGetWorkspaceStateInput(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return GetWorkspaceStateInput(
+            session=_UniffiFfiConverterOptionalString.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterOptionalString.check_lower(value.session)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterOptionalString.write(value.session, buf)
+
+@dataclass
 class HotkeyInput:
     def __init__(self, *, keys:typing.List[str], target:typing.Optional[ActionTarget], scope:typing.Optional[DesktopScope], session:typing.Optional[str]):
         self.keys = keys
@@ -3768,6 +3858,61 @@ class _UniffiFfiConverterTypeMoveCursorInput(_UniffiConverterRustBuffer):
         _UniffiFfiConverterOptionalTypeDesktopScope.write(value.scope, buf)
         _UniffiFfiConverterOptionalString.write(value.session, buf)
 
+class _UniffiFfiConverterInt64(_UniffiConverterPrimitiveInt):
+    CLASS_NAME = "i64"
+    VALUE_MIN = -2**63
+    VALUE_MAX = 2**63
+
+    @staticmethod
+    def read(buf):
+        return buf.read_i64()
+
+    @staticmethod
+    def write(value, buf):
+        buf.write_i64(value)
+
+@dataclass
+class MoveWindowToWorkspaceInput:
+    def __init__(self, *, session:typing.Optional[str], pid:int, window_id:int):
+        self.session = session
+        self.pid = pid
+        self.window_id = window_id
+
+
+
+
+    def __str__(self):
+        return "MoveWindowToWorkspaceInput(session={}, pid={}, window_id={})".format(self.session, self.pid, self.window_id)
+    def __eq__(self, other):
+        if self.session != other.session:
+            return False
+        if self.pid != other.pid:
+            return False
+        if self.window_id != other.window_id:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeMoveWindowToWorkspaceInput(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return MoveWindowToWorkspaceInput(
+            session=_UniffiFfiConverterOptionalString.read(buf),
+            pid=_UniffiFfiConverterInt64.read(buf),
+            window_id=_UniffiFfiConverterUInt64.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterOptionalString.check_lower(value.session)
+        _UniffiFfiConverterInt64.check_lower(value.pid)
+        _UniffiFfiConverterUInt64.check_lower(value.window_id)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterOptionalString.write(value.session, buf)
+        _UniffiFfiConverterInt64.write(value.pid, buf)
+        _UniffiFfiConverterUInt64.write(value.window_id, buf)
+
 
 
 
@@ -4022,6 +4167,96 @@ class _UniffiFfiConverterTypePressKeyInput(_UniffiConverterRustBuffer):
         _UniffiFfiConverterOptionalTypeDesktopScope.write(value.scope, buf)
         _UniffiFfiConverterOptionalString.write(value.session, buf)
         _UniffiFfiConverterOptionalSequenceString.write(value.modifiers, buf)
+
+@dataclass
+class ReleaseWorkspaceInput:
+    def __init__(self, *, session:typing.Optional[str]):
+        self.session = session
+
+
+
+
+    def __str__(self):
+        return "ReleaseWorkspaceInput(session={})".format(self.session)
+    def __eq__(self, other):
+        if self.session != other.session:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeReleaseWorkspaceInput(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return ReleaseWorkspaceInput(
+            session=_UniffiFfiConverterOptionalString.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterOptionalString.check_lower(value.session)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterOptionalString.write(value.session, buf)
+
+@dataclass
+class RestoreWorkspaceWindowsInput:
+    def __init__(self, *, session:typing.Optional[str]):
+        self.session = session
+
+
+
+
+    def __str__(self):
+        return "RestoreWorkspaceWindowsInput(session={})".format(self.session)
+    def __eq__(self, other):
+        if self.session != other.session:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeRestoreWorkspaceWindowsInput(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return RestoreWorkspaceWindowsInput(
+            session=_UniffiFfiConverterOptionalString.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterOptionalString.check_lower(value.session)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterOptionalString.write(value.session, buf)
+
+@dataclass
+class RevealWorkspaceInput:
+    def __init__(self, *, session:typing.Optional[str]):
+        self.session = session
+
+
+
+
+    def __str__(self):
+        return "RevealWorkspaceInput(session={})".format(self.session)
+    def __eq__(self, other):
+        if self.session != other.session:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeRevealWorkspaceInput(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return RevealWorkspaceInput(
+            session=_UniffiFfiConverterOptionalString.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterOptionalString.check_lower(value.session)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterOptionalString.write(value.session, buf)
 
 
 
@@ -5066,19 +5301,6 @@ class _UniffiFfiConverterTypeTypeTextInput(_UniffiConverterRustBuffer):
         _UniffiFfiConverterOptionalTypeDesktopScope.write(value.scope, buf)
         _UniffiFfiConverterOptionalString.write(value.session, buf)
 
-class _UniffiFfiConverterInt64(_UniffiConverterPrimitiveInt):
-    CLASS_NAME = "i64"
-    VALUE_MIN = -2**63
-    VALUE_MAX = 2**63
-
-    @staticmethod
-    def read(buf):
-        return buf.read_i64()
-
-    @staticmethod
-    def write(value, buf):
-        buf.write_i64(value)
-
 class _UniffiFfiConverterSequenceTypeStatePredicate(_UniffiConverterRustBuffer):
     @classmethod
     def check_lower(cls, value):
@@ -5245,6 +5467,172 @@ class _UniffiFfiConverterTypeVerifyStateOutput(_UniffiConverterRustBuffer):
         _UniffiFfiConverterUInt64.write(value.samples, buf)
         _UniffiFfiConverterSequenceTypePredicateOutcome.write(value.predicates, buf)
 
+class _UniffiFfiConverterSequenceUInt64(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiFfiConverterUInt64.check_lower(item)
+
+    @classmethod
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiFfiConverterUInt64.write(item, buf)
+
+    @classmethod
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
+
+        return [
+            _UniffiFfiConverterUInt64.read(buf) for i in range(count)
+        ]
+
+@dataclass
+class WorkspaceWindowState:
+    def __init__(self, *, pid:int, window_id:int, original_space_ids:typing.List[int], current_space_ids:typing.List[int], state:str):
+        self.pid = pid
+        self.window_id = window_id
+        self.original_space_ids = original_space_ids
+        self.current_space_ids = current_space_ids
+        self.state = state
+
+
+
+
+    def __str__(self):
+        return "WorkspaceWindowState(pid={}, window_id={}, original_space_ids={}, current_space_ids={}, state={})".format(self.pid, self.window_id, self.original_space_ids, self.current_space_ids, self.state)
+    def __eq__(self, other):
+        if self.pid != other.pid:
+            return False
+        if self.window_id != other.window_id:
+            return False
+        if self.original_space_ids != other.original_space_ids:
+            return False
+        if self.current_space_ids != other.current_space_ids:
+            return False
+        if self.state != other.state:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeWorkspaceWindowState(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return WorkspaceWindowState(
+            pid=_UniffiFfiConverterInt64.read(buf),
+            window_id=_UniffiFfiConverterUInt64.read(buf),
+            original_space_ids=_UniffiFfiConverterSequenceUInt64.read(buf),
+            current_space_ids=_UniffiFfiConverterSequenceUInt64.read(buf),
+            state=_UniffiFfiConverterString.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterInt64.check_lower(value.pid)
+        _UniffiFfiConverterUInt64.check_lower(value.window_id)
+        _UniffiFfiConverterSequenceUInt64.check_lower(value.original_space_ids)
+        _UniffiFfiConverterSequenceUInt64.check_lower(value.current_space_ids)
+        _UniffiFfiConverterString.check_lower(value.state)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterInt64.write(value.pid, buf)
+        _UniffiFfiConverterUInt64.write(value.window_id, buf)
+        _UniffiFfiConverterSequenceUInt64.write(value.original_space_ids, buf)
+        _UniffiFfiConverterSequenceUInt64.write(value.current_space_ids, buf)
+        _UniffiFfiConverterString.write(value.state, buf)
+
+class _UniffiFfiConverterSequenceTypeWorkspaceWindowState(_UniffiConverterRustBuffer):
+    @classmethod
+    def check_lower(cls, value):
+        for item in value:
+            _UniffiFfiConverterTypeWorkspaceWindowState.check_lower(item)
+
+    @classmethod
+    def write(cls, value, buf):
+        items = len(value)
+        buf.write_i32(items)
+        for item in value:
+            _UniffiFfiConverterTypeWorkspaceWindowState.write(item, buf)
+
+    @classmethod
+    def read(cls, buf):
+        count = buf.read_i32()
+        if count < 0:
+            raise InternalError("Unexpected negative sequence length")
+
+        return [
+            _UniffiFfiConverterTypeWorkspaceWindowState.read(buf) for i in range(count)
+        ]
+
+@dataclass
+class WorkspaceStateOutput:
+    def __init__(self, *, owned:bool, space_id:typing.Optional[int], space_created:bool, space_exists:bool, active:bool, private_api:bool, windows:typing.List[WorkspaceWindowState]):
+        self.owned = owned
+        self.space_id = space_id
+        self.space_created = space_created
+        self.space_exists = space_exists
+        self.active = active
+        self.private_api = private_api
+        self.windows = windows
+
+
+
+
+    def __str__(self):
+        return "WorkspaceStateOutput(owned={}, space_id={}, space_created={}, space_exists={}, active={}, private_api={}, windows={})".format(self.owned, self.space_id, self.space_created, self.space_exists, self.active, self.private_api, self.windows)
+    def __eq__(self, other):
+        if self.owned != other.owned:
+            return False
+        if self.space_id != other.space_id:
+            return False
+        if self.space_created != other.space_created:
+            return False
+        if self.space_exists != other.space_exists:
+            return False
+        if self.active != other.active:
+            return False
+        if self.private_api != other.private_api:
+            return False
+        if self.windows != other.windows:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeWorkspaceStateOutput(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return WorkspaceStateOutput(
+            owned=_UniffiFfiConverterBoolean.read(buf),
+            space_id=_UniffiFfiConverterOptionalUInt64.read(buf),
+            space_created=_UniffiFfiConverterBoolean.read(buf),
+            space_exists=_UniffiFfiConverterBoolean.read(buf),
+            active=_UniffiFfiConverterBoolean.read(buf),
+            private_api=_UniffiFfiConverterBoolean.read(buf),
+            windows=_UniffiFfiConverterSequenceTypeWorkspaceWindowState.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterBoolean.check_lower(value.owned)
+        _UniffiFfiConverterOptionalUInt64.check_lower(value.space_id)
+        _UniffiFfiConverterBoolean.check_lower(value.space_created)
+        _UniffiFfiConverterBoolean.check_lower(value.space_exists)
+        _UniffiFfiConverterBoolean.check_lower(value.active)
+        _UniffiFfiConverterBoolean.check_lower(value.private_api)
+        _UniffiFfiConverterSequenceTypeWorkspaceWindowState.check_lower(value.windows)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterBoolean.write(value.owned, buf)
+        _UniffiFfiConverterOptionalUInt64.write(value.space_id, buf)
+        _UniffiFfiConverterBoolean.write(value.space_created, buf)
+        _UniffiFfiConverterBoolean.write(value.space_exists, buf)
+        _UniffiFfiConverterBoolean.write(value.active, buf)
+        _UniffiFfiConverterBoolean.write(value.private_api, buf)
+        _UniffiFfiConverterSequenceTypeWorkspaceWindowState.write(value.windows, buf)
+
 
 
 
@@ -5340,11 +5728,13 @@ __all__ = [
     "ClipboardReadOutput",
     "ClipboardWriteInput",
     "ClipboardWriteOutput",
+    "CreateWorkspaceInput",
     "CursorMotionOutput",
     "CursorPointOutput",
     "CursorThemeOutput",
     "CursorThemeSelection",
     "CursorVisualOutput",
+    "DeleteWorkspaceInput",
     "DragInput",
     "ElementSelector",
     "ElementPredicate",
@@ -5358,14 +5748,19 @@ __all__ = [
     "GetScreenSizeInput",
     "GetSessionInput",
     "GetSessionStateInput",
+    "GetWorkspaceStateInput",
     "HotkeyInput",
     "InvokeMenuInput",
     "ListSessionsInput",
     "SessionOutput",
     "ListSessionsOutput",
     "MoveCursorInput",
+    "MoveWindowToWorkspaceInput",
     "PredicateOutcome",
     "PressKeyInput",
+    "ReleaseWorkspaceInput",
+    "RestoreWorkspaceWindowsInput",
+    "RevealWorkspaceInput",
     "ScrollInput",
     "SessionStateOutput",
     "SetAgentCursorEnabledInput",
@@ -5382,4 +5777,6 @@ __all__ = [
     "TypeTextInput",
     "VerifyStateInput",
     "VerifyStateOutput",
+    "WorkspaceWindowState",
+    "WorkspaceStateOutput",
 ]

@@ -150,6 +150,7 @@ impl Tool for HotkeyTool {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
+        let call_state = self.state.for_call();
         use cua_driver_core::tool_args::ArgsExt;
         if args.opt_str("scope").as_deref() == Some("desktop")
             && args.get("pid").is_none()
@@ -265,8 +266,7 @@ impl Tool for HotkeyTool {
         }
 
         let element_guard = if let (Some(index), Some(window_id)) = (element_index, window_id) {
-            match self
-                .state
+            match call_state
                 .element_cache
                 .get_element_retained(pid, window_id, index)
             {
@@ -370,7 +370,7 @@ impl Tool for HotkeyTool {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 if let Err(e) = super::focus_by_pixel(
-                    &self.state,
+                    &call_state,
                     pid,
                     window_id,
                     cx,

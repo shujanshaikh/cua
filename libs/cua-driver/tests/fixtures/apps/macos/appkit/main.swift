@@ -609,6 +609,56 @@ struct CuaAppKitHarness {
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
+        if let report = ProcessInfo.processInfo.environment["CUA_HARNESS_WORKSPACE_REPORT"] {
+            // Dedicated background-only fixture mode. Never activate or make a
+            // key window on the developer's desktop.
+            let controllers = (1...3).map { index -> HarnessWindowController in
+                let controller = HarnessWindowController()
+                controller.window.title = "Cua workspace fixture \(index)"
+                controller.textInput.stringValue = "fixture-\(index)-initial"
+                if ProcessInfo.processInfo.environment["CUA_HARNESS_WORKSPACE_SCREEN"] == "last", let screen = NSScreen.screens.last {
+                    controller.window.setFrameOrigin(NSPoint(x: screen.visibleFrame.minX + CGFloat(index * 24), y: screen.visibleFrame.minY + 24))
+                }
+                controller.window.orderBack(nil)
+                return controller
+            }
+            let rows = controllers.map { ["pid": Int(ProcessInfo.processInfo.processIdentifier), "window_id": $0.window.windowNumber] }
+            let payload: [String: Any] = ["windows": rows]
+            if let data = try? JSONSerialization.data(withJSONObject: payload) { try? data.write(to: URL(fileURLWithPath: report), options: .atomic) }
+            // A file oracle observes only these fixture objects, independently
+            // of Driver accessibility snapshots. Commands cannot address other apps.
+            var lastCommand: String?
+            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: report + ".command.json")),
+                   let command = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                   let nonce = command["nonce"] as? String, nonce != lastCommand,
+                   let index = command["index"] as? Int, controllers.indices.contains(index),
+                   let action = command["action"] as? String {
+                    lastCommand = nonce
+                    let window = controllers[index].window
+                    switch action {
+                    case "minimize": window.miniaturize(nil)
+                    case "restore": window.deminiaturize(nil); window.orderBack(nil)
+                    case "close": window.close()
+                    default: break
+                    }
+                }
+                let states: [[String: Any]] = controllers.map { controller in
+                    ["window_id": controller.window.windowNumber,
+                     "value": controller.textInput.stringValue,
+                     "minimized": controller.window.isMiniaturized,
+                     "visible": controller.window.isVisible]
+                }
+                if let data = try? JSONSerialization.data(withJSONObject: ["windows": states, "command": lastCommand ?? ""]) {
+                    try? data.write(to: URL(fileURLWithPath: report + ".state.json"), options: .atomic)
+                }
+            }
+            // Explicit fixture-only cleanup, selected by this environment flag.
+            let lifetime = Double(ProcessInfo.processInfo.environment["CUA_HARNESS_WORKSPACE_SECONDS"] ?? "600") ?? 600
+            Timer.scheduledTimer(withTimeInterval: lifetime, repeats: false) { _ in app.terminate(nil) }
+            withExtendedLifetime(controllers) { app.run() }
+            return
+        }
         let controller = HarnessWindowController()
         installMenuBar(target: controller)
         controller.show()

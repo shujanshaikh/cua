@@ -94,6 +94,7 @@ impl Tool for SetValueTool {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
+        let call_state = self.state.for_call();
         use cua_driver_core::tool_args::ArgsExt;
         let pid = match args.require_i32("pid") {
             Ok(v) => v,
@@ -147,8 +148,7 @@ impl Tool for SetValueTool {
         // the element mid-action (use-after-free → daemon crash). Guard lives
         // to the end of this method, past the AX write below.
         let element_guard =
-            match self
-                .state
+            match call_state
                 .element_cache
                 .get_element_retained(pid, window_id, element_index)
             {
@@ -189,7 +189,7 @@ impl Tool for SetValueTool {
                 cursor_overlay::OverlayCommand::PinAbove(window_id as u64),
             );
             crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), screen_x, screen_y).await;
-            self.state
+            call_state
                 .cursor_registry
                 .update_position(&cursor_key, screen_x, screen_y);
         }
@@ -211,13 +211,15 @@ impl Tool for SetValueTool {
         let prior_front = apps::frontmost_pid();
         let snapshot = WindowChangeDetector::snapshot(prior_front);
 
+        let allow_unbound_web =
+            cua_driver_core::tool::current_selected_observation_scope().is_none();
         let result = focus_guard::with_focus_suppressed(
             Some(pid),
             prior_front,
             "set_value.AXValue",
             || async move {
                 tokio::task::spawn_blocking(move || {
-                    set_value_blocking(element_ptr, element_index, pid, &value)
+                    set_value_blocking(element_ptr, element_index, pid, &value, allow_unbound_web)
                 })
                 .await
             },
@@ -297,6 +299,7 @@ fn set_value_blocking(
     element_index: usize,
     pid: i32,
     value: &str,
+    allow_unbound_web: bool,
 ) -> anyhow::Result<SetValueOutcome> {
     let element = element_ptr as AXUIElementRef;
 
@@ -305,12 +308,18 @@ fn set_value_blocking(
     if role == "AXPopUpButton" {
         let element_title = unsafe { copy_string_attr(element, "AXTitle") }.unwrap_or_default();
         // Menu-item selection, not an AXValue write — no read-back to report.
-        select_popup_option(element, element_index, pid, value, &element_title).map(|detail| {
-            SetValueOutcome {
-                detail,
-                verified: None,
-                changed: None,
-            }
+        select_popup_option(
+            element,
+            element_index,
+            pid,
+            value,
+            &element_title,
+            allow_unbound_web,
+        )
+        .map(|detail| SetValueOutcome {
+            detail,
+            verified: None,
+            changed: None,
         })
     } else {
         // Default path: write AXValue directly. Numeric controls (AXSlider /
@@ -489,6 +498,7 @@ fn select_popup_option(
     pid: i32,
     value: &str,
     element_title: &str,
+    allow_unbound_web: bool,
 ) -> anyhow::Result<String> {
     let children = unsafe { copy_children(element) };
 
@@ -543,6 +553,10 @@ fn select_popup_option(
         }
 
         return result;
+    }
+
+    if !allow_unbound_web {
+        anyhow::bail!("selected_window_operation_unsupported: popup has no exact AX option; unbound browser fallback is unavailable");
     }
 
     // Strategy 2: Safari/WebKit — no AX children when popup is closed.

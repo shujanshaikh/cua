@@ -1239,6 +1239,7 @@ dependencies = [
  "cua-driver-contract",
  "cua-driver-core",
  "cursor-overlay",
+ "pip-preview",
  "platform-linux",
  "platform-macos",
  "platform-windows",

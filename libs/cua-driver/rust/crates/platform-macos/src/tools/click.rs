@@ -214,6 +214,7 @@ impl Tool for ClickTool {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
+        let call_state = self.state.for_call();
         use cua_driver_core::tool_args::ArgsExt;
 
         // ── Window-less screen-absolute branch (scope="desktop") ──────
@@ -296,7 +297,7 @@ impl Tool for ClickTool {
             // Glide the session's agent cursor to the screen point for visibility.
             let cursor_key = super::cursor_tools::resolve_cursor_key(&args);
             crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), sx, sy).await;
-            self.state
+            call_state
                 .cursor_registry
                 .update_position(&cursor_key, sx, sy);
 
@@ -427,7 +428,7 @@ impl Tool for ClickTool {
             // concurrent get_window_state on the same (pid, window_id) while
             // this click is mid-flight (use-after-free → daemon crash). The
             // guard lives to the end of this method, past the AX action below.
-            let element_guard = match self.state.element_cache.get_element_retained(pid, wid, idx) {
+            let element_guard = match call_state.element_cache.get_element_retained(pid, wid, idx) {
                 Some(e) => e,
                 None => {
                     return ToolResult::error(format!(
@@ -499,7 +500,7 @@ impl Tool for ClickTool {
                     cursor_overlay::OverlayCommand::PinAbove(wid as u64),
                 );
                 crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), cx, cy).await;
-                self.state
+                call_state
                     .cursor_registry
                     .update_position(&cursor_key, cx, cy);
 
@@ -543,7 +544,7 @@ impl Tool for ClickTool {
                 // Keep the registry in sync with the overlay so
                 // get_agent_cursor_state reports a truthful position even when
                 // the click was dispatched via the AX path (no pixel coords).
-                self.state
+                call_state
                     .cursor_registry
                     .update_position(&cursor_key, cx, cy);
             }
@@ -770,9 +771,9 @@ impl Tool for ClickTool {
                         // Session-effective max dimension so debug_image_out
                         // matches the resize the calling session sees in
                         // get_window_state (precedence: session override > global).
-                        let max_dim = self.state.session_config.effective_max_image_dimension(
+                        let max_dim = call_state.session_config.effective_max_image_dimension(
                             args.opt_str("_session_id").as_deref(),
-                            &self.state.config.read().unwrap(),
+                            &call_state.config.read().unwrap(),
                         );
                         let dbg_path_c = dbg_path.clone();
                         let dbg_result = tokio::task::spawn_blocking(move || {
@@ -799,7 +800,7 @@ impl Tool for ClickTool {
             }
 
             if from_zoom {
-                match self.state.zoom_registry.get(pid) {
+                match call_state.zoom_registry.get(pid) {
                     Some(ctx) => {
                         let (wx, wy) = ctx.zoom_to_window(cx, cy);
                         cx = wx;
@@ -811,7 +812,7 @@ impl Tool for ClickTool {
                         ))
                     }
                 }
-            } else if let Some(ratio) = self.state.resize_registry.ratio(pid, window_id) {
+            } else if let Some(ratio) = call_state.resize_registry.ratio(pid, window_id) {
                 // Coordinates are in the downscaled image space; scale back to native pixels.
                 cx *= ratio;
                 cy *= ratio;
@@ -971,7 +972,7 @@ impl Tool for ClickTool {
             // arrive — mirrors Swift's `AgentCursor.shared.animateAndWait(to:)`.
             crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), screen_x, screen_y).await;
             // Keep the registry in sync with the overlay (see AX path above).
-            self.state
+            call_state
                 .cursor_registry
                 .update_position(&cursor_key, screen_x, screen_y);
 

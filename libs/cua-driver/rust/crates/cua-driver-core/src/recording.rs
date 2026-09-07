@@ -75,9 +75,15 @@ pub fn set_classified_screenshot_fn(
 /// by the PiP push hook (and by anything else that wants to share the
 /// per-turn screenshot pipeline without duplicating the platform glue).
 pub fn screenshot_for(window_id: Option<u64>, pid: Option<i64>) -> Option<Vec<u8>> {
-    SCREENSHOT_FN
+    if !selected_capture_allowed(window_id, pid) {
+        return None;
+    }
+    let png = SCREENSHOT_FN
         .get()
-        .and_then(|capture| capture(window_id, pid).png)
+        .and_then(|capture| capture(window_id, pid).png);
+    selected_capture_allowed(window_id, pid)
+        .then_some(png)
+        .flatten()
 }
 
 // ── Platform click-marker callback ───────────────────────────────────────────
@@ -170,6 +176,8 @@ struct RecordingInner {
     /// #1775 generation token: a session id is a stable owner identity rather
     /// than a monotonic counter, and it doubles as the config-override key.
     owner: Option<String>,
+    observation_owner: Option<String>,
+    selected_only: bool,
     output_dir: Option<PathBuf>,
     next_turn: u32,
     session_start_ms: u64,
@@ -223,6 +231,8 @@ impl RecordingSession {
                 enabled: false,
                 generation: 0,
                 owner: None,
+                observation_owner: None,
+                selected_only: false,
                 output_dir: None,
                 next_turn: 1,
                 session_start_ms: 0,
@@ -260,6 +270,13 @@ impl RecordingSession {
         owner: Option<&str>,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.lock().unwrap();
+        let selected = crate::tool::current_selected_observation_scope();
+        if selected.is_some() && inner.enabled && inner.owner.as_deref() != owner {
+            anyhow::bail!("recording_session_mismatch: another session owns the active recording");
+        }
+        if selected.is_some() && record_video {
+            anyhow::bail!("selected_window_operation_unsupported: display video is unavailable");
+        }
         // Write-boundary resurrection guard — checked INSIDE the lock so the
         // is_session_ended test is atomic with the enabled/owner write below.
         // An in-flight start_recording that lands after its owning session ended
@@ -319,13 +336,15 @@ impl RecordingSession {
         // post-hoc analysis, so we run it anyway — the cost is one
         // background thread + a small jsonl file.
         let cursor_path = dir.join("cursor.jsonl");
-        match CursorSampler::start(cursor_path, monotonic_start) {
-            Ok(s) => {
-                inner.cursor = Some(s);
-            }
-            Err(e) => {
-                tracing::warn!(target: "recording",
+        if selected.is_none() {
+            match CursorSampler::start(cursor_path, monotonic_start) {
+                Ok(s) => {
+                    inner.cursor = Some(s);
+                }
+                Err(e) => {
+                    tracing::warn!(target: "recording",
                     "Cursor sampler failed to start: {e}");
+                }
             }
         }
 
@@ -346,6 +365,8 @@ impl RecordingSession {
         // the daemon-global recorder is a singleton, so the latest start() owns
         // it. The previous owner's disconnect then no-ops in stop_owner().
         inner.owner = owner.map(str::to_owned);
+        inner.observation_owner = inner.owner.clone();
+        inner.selected_only = selected.is_some();
         inner.generation = inner.generation.wrapping_add(1);
         inner.enabled = true;
         inner.output_dir = Some(dir);
@@ -454,6 +475,10 @@ impl RecordingSession {
         self.start(dir, true, None)
     }
 
+    pub(crate) fn observation_owner(&self) -> Option<String> {
+        self.inner.lock().unwrap().observation_owner.clone()
+    }
+
     /// Return a snapshot of the current state (non-blocking).
     pub fn current_state(&self) -> RecordingState {
         let inner = self.inner.lock().unwrap();
@@ -502,7 +527,10 @@ impl RecordingSession {
     ) -> Option<PendingTurn> {
         let (turn_dir, session_start_ms, generation) = {
             let mut inner = self.inner.lock().unwrap();
-            if !inner.enabled {
+            if !inner.enabled
+                || (inner.selected_only
+                    && inner.owner.as_deref() != args.get("_session_id").and_then(Value::as_str))
+            {
                 return None;
             }
             let out = inner.output_dir.clone()?;
@@ -632,17 +660,48 @@ impl Default for RecordingSession {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+fn selected_capture_allowed(window_id: Option<u64>, pid: Option<i64>) -> bool {
+    let Some(context) = crate::tool::current_dispatch_authorization_context() else {
+        return true;
+    };
+    if context.is_expired() {
+        return false;
+    }
+    match context.selected_windows() {
+        Ok(None) => true,
+        Ok(Some(selection)) => pid.zip(window_id).is_some_and(|(pid, window_id)| {
+            selection
+                .validate(crate::selected_windows::WindowTarget { pid, window_id })
+                .is_ok()
+        }),
+        Err(_) => false,
+    }
+}
+
 fn capture_turn(window_id: Option<u64>, pid: Option<i64>) -> TurnCapture {
+    let refused = || TurnCapture {
+        state: None,
+        screenshot: None,
+        screenshot_classification: Some("selected_window_unavailable"),
+    };
+    if !selected_capture_allowed(window_id, pid) {
+        return refused();
+    }
     let screenshot = SCREENSHOT_FN
         .get()
         .map(|capture| capture(window_id, pid))
         .unwrap_or_else(|| ScreenshotCapture::unavailable("capture_hook_unavailable"));
-    TurnCapture {
+    let capture = TurnCapture {
         state: AX_SNAPSHOT_FN
             .get()
             .and_then(|capture| capture(window_id, pid)),
         screenshot: screenshot.png,
         screenshot_classification: screenshot.classification,
+    };
+    if selected_capture_allowed(window_id, pid) {
+        capture
+    } else {
+        refused()
     }
 }
 

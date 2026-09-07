@@ -157,6 +157,7 @@ impl Tool for TypeTextTool {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
+        let call_state = self.state.for_call();
         use cua_driver_core::tool_args::ArgsExt;
         if args.opt_str("scope").as_deref() == Some("desktop")
             && args.get("pid").is_none()
@@ -261,7 +262,7 @@ impl Tool for TypeTextTool {
         // the blocking type below dereferences it (use-after-free → daemon
         // crash). The guard lives to method end, past type_text_blocking.
         let element_guard = if let (Some(idx), Some(wid)) = (element_index, window_id) {
-            match self.state.element_cache.get_element_retained(pid, wid, idx) {
+            match call_state.element_cache.get_element_retained(pid, wid, idx) {
                 Some(e) => Some((e, idx)),
                 None => {
                     return ToolResult::error(format!(
@@ -312,7 +313,7 @@ impl Tool for TypeTextTool {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             if let Err(e) = super::focus_by_pixel(
-                &self.state,
+                &call_state,
                 pid,
                 window_id,
                 cx,
@@ -344,7 +345,7 @@ impl Tool for TypeTextTool {
                 );
                 crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), screen_x, screen_y)
                     .await;
-                self.state
+                call_state
                     .cursor_registry
                     .update_position(&cursor_key, screen_x, screen_y);
             }

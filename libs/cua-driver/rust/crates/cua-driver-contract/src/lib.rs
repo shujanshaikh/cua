@@ -20,6 +20,8 @@ mod desktop;
 mod inputs;
 mod outputs;
 mod session;
+mod workspace;
+pub use workspace::*;
 mod verification;
 
 pub use cursor::{
@@ -185,6 +187,7 @@ pub struct ContractManifest {
 
 pub fn manifest() -> ContractManifest {
     let mut tools = session::contracts();
+    tools.extend(workspace::contracts());
     tools.extend(desktop::contracts());
     tools.extend(cursor_tools::contracts());
     tools.extend(verification::contracts());

@@ -36,6 +36,7 @@ tokio::task_local! {
     /// Opaque generation for runtime-owned mutable resources. Nested
     /// dispatches inherit this key, while public arguments can never select it.
     static DISPATCH_RUNTIME_SCOPE: String;
+    static DISPATCH_OBSERVATION_SCOPE: String;
 }
 
 /// Return the immutable authorization context bound to the current dispatch.
@@ -43,12 +44,19 @@ tokio::task_local! {
 /// Resource adapters use this instead of consulting process-global
 /// compatibility configuration. The value exists only while the canonical
 /// registry chokepoint is executing a tool, including nested dispatch.
-pub(crate) fn current_dispatch_authorization_context(
+#[doc(hidden)]
+pub fn current_dispatch_authorization_context(
 ) -> Option<Arc<crate::session_authorization::EffectiveAuthorizationContext>> {
     DISPATCH_AUTHORIZATION_CONTEXT.try_with(Arc::clone).ok()
 }
 
 #[doc(hidden)]
+pub fn current_selected_observation_scope() -> Option<String> {
+    let context = current_dispatch_authorization_context()?;
+    context.selected_windows().ok().flatten()?;
+    DISPATCH_OBSERVATION_SCOPE.try_with(Clone::clone).ok()
+}
+
 pub fn current_dispatch_runtime_scope() -> Option<String> {
     DISPATCH_RUNTIME_SCOPE
         .try_with(Clone::clone)
@@ -619,6 +627,8 @@ impl TrustedInvocationEvidence {
 
 /// Thread-safe collection of all registered tools.
 pub struct ToolRegistry {
+    selection_backend: Option<Arc<dyn crate::selected_windows::WindowSelectionBackend>>,
+    workspace_backend: Option<Arc<dyn crate::workspace::WorkspaceBackend>>,
     tools: HashMap<String, Box<dyn Tool>>,
     /// Ordered list of tool names for `tools/list`.
     order: Vec<String>,
@@ -643,6 +653,32 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    pub fn set_workspace_backend(&mut self, backend: Arc<dyn crate::workspace::WorkspaceBackend>) {
+        self.workspace_backend = Some(backend);
+    }
+
+    pub fn set_window_selection_backend(
+        &mut self,
+        backend: Arc<dyn crate::selected_windows::WindowSelectionBackend>,
+    ) {
+        self.selection_backend = Some(backend);
+    }
+
+    pub fn bind_selected_windows(
+        &self,
+        context: &crate::session_authorization::EffectiveAuthorizationContext,
+    ) -> Result<(), String> {
+        if context
+            .capability_manifest()
+            .and_then(crate::session_manifest::SessionManifest::selected_window_targets)
+            .is_none()
+        {
+            return Ok(());
+        }
+        let backend = self.selection_backend.as_deref().ok_or("selected_window_operation_unsupported: native lifetime binding is unavailable on this platform")?;
+        context.bind_selected_windows(backend)
+    }
+
     pub fn new() -> Self {
         Self::new_with_protected_consent_provider(None)
     }
@@ -662,6 +698,8 @@ impl ToolRegistry {
         let weak_ownership = Arc::downgrade(&protected_resource_ownership);
         let session_end_hook =
             crate::session::register_scoped_session_end_hook(move |session_id| {
+                crate::pip_hook::clear_session(session_id);
+                crate::element_token::global().clear_runtime_scope(session_id);
                 if let Some(ownership) = weak_ownership.upgrade() {
                     ownership.remove_session(session_id);
                 }
@@ -690,6 +728,8 @@ impl ToolRegistry {
                 })
             }));
         Self {
+            selection_backend: None,
+            workspace_backend: None,
             tools: HashMap::new(),
             order: Vec::new(),
             recording,
@@ -848,6 +888,7 @@ impl ToolRegistry {
     /// the legacy capture-scope readers). Call alongside
     /// `register_recording_tools` from each platform's `register_all`.
     pub fn register_session_tools(&mut self) {
+        crate::workspace::register(self, self.workspace_backend.clone());
         use crate::session_tools::{
             EndSessionTool, EscalateSessionTool, GetSessionStateTool, GetSessionTool,
             ListSessionsTool, StartSessionTool,
@@ -1007,15 +1048,33 @@ impl ToolRegistry {
         evidence: TrustedInvocationEvidence,
     ) -> ToolResult {
         let runtime_scope = context.runtime_scope_key();
-        DISPATCH_RUNTIME_SCOPE
-            .scope(runtime_scope, async {
-                DISPATCH_TRUSTED_INVOCATION_EVIDENCE
-                    .scope(evidence.clone(), async {
-                        DISPATCH_AUTHORIZATION_CONTEXT
-                            .scope(
-                                context.clone(),
-                                self.invoke_authorized(name, args, context.as_ref(), &evidence),
-                            )
+        let mut observation_args = args.clone();
+        crate::tool_args::sanitize_reserved_args(&mut observation_args);
+        let prefix = namespace_runtime_args(&mut observation_args, &context, &evidence);
+        let observation_scope = observation_args
+            .get("_session_id")
+            .or_else(|| observation_args.get("_transport_session_id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("{prefix}implicit-direct"));
+        DISPATCH_OBSERVATION_SCOPE
+            .scope(observation_scope, async {
+                DISPATCH_RUNTIME_SCOPE
+                    .scope(runtime_scope, async {
+                        DISPATCH_TRUSTED_INVOCATION_EVIDENCE
+                            .scope(evidence.clone(), async {
+                                DISPATCH_AUTHORIZATION_CONTEXT
+                                    .scope(
+                                        context.clone(),
+                                        self.invoke_authorized(
+                                            name,
+                                            args,
+                                            context.as_ref(),
+                                            &evidence,
+                                        ),
+                                    )
+                                    .await
+                            })
                             .await
                     })
                     .await
@@ -1090,6 +1149,56 @@ impl ToolRegistry {
             return permission_denied_result(error.to_string());
         }
 
+        let selection = match context.selected_windows() {
+            Ok(selection) => selection,
+            Err(error) => return protected_refusal("selected_window_unbound", &error),
+        };
+        if let Some(selection) = selection {
+            if let Err(error) = selection.authorize(resolved_name, &args) {
+                return protected_refusal(
+                    error.split(':').next().unwrap_or("selected_window_denied"),
+                    &error,
+                );
+            }
+        }
+
+        let selected_browser_target = if let Some(selection) =
+            selection.filter(|_| args.get("target_id").is_some())
+        {
+            let mut target = None;
+            for adapter in [
+                "private_observation",
+                "browser_bound_input",
+                "browser_consequential_action",
+            ] {
+                match tool.protected_resource_scope(adapter, &args).await {
+                    Ok(Some(resource)) => {
+                        target = crate::selected_windows::SelectedWindows::target(&resource).ok();
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        return protected_refusal(
+                            "selected_window_identity_unavailable",
+                            "browser target could not attest exact native ownership",
+                        )
+                    }
+                }
+            }
+            let Some(target) = target else {
+                return protected_refusal(
+                    "selected_window_operation_unsupported",
+                    "browser adapter has no exact native-window attestation",
+                );
+            };
+            if let Err(error) = selection.validate(target) {
+                return protected_refusal("selected_window_denied", &error);
+            }
+            Some(target)
+        } else {
+            None
+        };
+
         let mut public_args = args.clone();
 
         // Public session labels remain part of the stable transport contract,
@@ -1123,6 +1232,26 @@ impl ToolRegistry {
                 restore_public_runtime_result(&mut result, &runtime_prefix);
                 return result;
             }
+        }
+
+        let recording_owner = self.recording.current_state().owner;
+        let recording_access_owner = if resolved_name == "start_recording" {
+            recording_owner.clone()
+        } else {
+            self.recording.observation_owner()
+        };
+        if selection.is_some()
+            && matches!(
+                resolved_name,
+                "start_recording" | "stop_recording" | "get_recording_state"
+            )
+            && recording_access_owner.is_some()
+            && recording_access_owner != runtime_session
+        {
+            return protected_refusal(
+                "recording_session_mismatch",
+                "this session does not own the active recording",
+            );
         }
 
         // Reject modality violations before reserving a recording turn. A
@@ -1491,6 +1620,7 @@ impl ToolRegistry {
         // Reserve and capture the turn before dispatch so recorded evidence
         // shows the application immediately before the action changed it.
         let should_record = !tool.def().read_only
+            && (recording_owner.is_none() || recording_owner == runtime_session)
             && !matches!(
                 resolved_name,
                 "start_recording" | "stop_recording" | "get_recording_state" | "replay_trajectory"
@@ -1522,12 +1652,83 @@ impl ToolRegistry {
             })
             .flatten();
 
+        if let Some(selection) = selection {
+            if let Err(error) = selection.authorize(resolved_name, &args) {
+                return protected_refusal("selected_window_stale", &error);
+            }
+        }
+        if let (Some(selection), Some(target)) = (selection, selected_browser_target) {
+            if let Err(error) = selection.validate(target) {
+                return protected_refusal("selected_window_stale", &error);
+            }
+        }
         let mut result = tool.invoke(args.clone()).await;
+        if context.is_revoked() || context.is_expired() {
+            result = protected_refusal(
+                "authorization_revoked",
+                "session authorization ended during dispatch",
+            );
+        }
+        if let (Some(selection), Some(target)) = (selection, selected_browser_target) {
+            if let Err(error) = selection.validate(target) {
+                result = protected_refusal("selected_window_stale", &error);
+            }
+        }
+        if let Some(selection) = selection {
+            if result.is_error != Some(true)
+                && matches!(resolved_name, "list_windows" | "list_apps")
+            {
+                let targets = selection.live_targets();
+                let key = if resolved_name == "list_windows" {
+                    "windows"
+                } else {
+                    "apps"
+                };
+                let rows = result
+                    .structured_content
+                    .as_ref()
+                    .and_then(|value| value.get(key))
+                    .and_then(Value::as_array)
+                    .map(|rows| {
+                        rows.iter()
+                            .filter(|row| {
+                                targets.iter().any(|target| {
+                                    row.get("pid").and_then(Value::as_i64) == Some(target.pid)
+                                        && (key == "apps"
+                                            || row.get("window_id").and_then(Value::as_u64)
+                                                == Some(target.window_id))
+                                })
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                result = ToolResult::text(format!("Found {} approved {key}.", rows.len()))
+                    .with_structured(serde_json::json!({key: rows}));
+            } else if let Err(error) = selection.authorize(resolved_name, &args) {
+                result = protected_refusal("selected_window_stale", &error);
+            }
+        }
         drop(lifecycle_dispatch);
         // The platform worker has exited, so another text operation for this
         // pid may now start even while result projection and evidence capture
         // finish for the completed call.
         drop(_text_input_admission);
+        if selection.is_some()
+            && matches!(
+                resolved_name,
+                "start_recording" | "stop_recording" | "get_recording_state"
+            )
+            && self
+                .recording
+                .observation_owner()
+                .is_some_and(|owner| Some(owner) != runtime_session)
+        {
+            result = protected_refusal(
+                "recording_session_mismatch",
+                "recording ownership changed during dispatch",
+            );
+        }
         if result.action_record.is_none() {
             if let Some(structured) = result.structured_content.as_ref() {
                 result.action_record = crate::action_record::ActionExecutionRecord::from_legacy(
@@ -1652,16 +1853,24 @@ impl ToolRegistry {
         // of action tools the recording pipeline cares about (non-read-only,
         // not the recording-control meta-tools) so the live view matches
         // what the recorder would have captured for the turn.
-        if pip_hook::pip_enabled() && should_record && !private_consent_turn {
+        if pip_hook::pip_enabled_for(runtime_session.as_deref(), selection.is_some())
+            && should_record
+            && !private_consent_turn
+            && result.is_error != Some(true)
+        {
             let window_id = args.opt_u64("window_id");
             let pid = args.opt_i64("pid");
             if let Some(png_bytes) = screenshot_for(window_id, pid) {
                 let label = synthesize_action_label(name, &public_args);
-                pip_hook::push_pip_frame(pip_hook::PipHookFrame {
-                    png_bytes,
-                    action_label: label,
-                    timestamp_ms: now_ms(),
-                });
+                pip_hook::push_pip_frame_for(
+                    runtime_session.as_deref(),
+                    selection.is_some(),
+                    pip_hook::PipHookFrame {
+                        png_bytes,
+                        action_label: label,
+                        timestamp_ms: now_ms(),
+                    },
+                );
             }
         }
 
@@ -1677,6 +1886,11 @@ impl ToolRegistry {
         lifecycle_session: Option<&str>,
         adapter_id: &str,
     ) -> Result<(), crate::consent::ConsentError> {
+        if context.selected_windows().ok().flatten().is_some()
+            && matches!(tool_name, "list_windows" | "list_apps")
+        {
+            return Ok(()); // The registry publishes only fresh selected rows.
+        }
         if context.mode() == crate::authorization::PermissionMode::Unrestricted
             && context.capability_manifest().is_none()
         {

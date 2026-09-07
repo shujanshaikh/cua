@@ -508,7 +508,8 @@ fn build_window_capture_plan(
 
     let config = SCStreamConfiguration::new()
         .with_width(out_w)
-        .with_height(out_h);
+        .with_height(out_h)
+        .with_includes_child_windows(false);
 
     Ok(std::sync::Arc::new(WindowCapturePlan {
         filter,
@@ -725,7 +726,54 @@ fn screenshot_window_bytes_sck(window_id: u32) -> anyhow::Result<Vec<u8>> {
 ///
 /// Tries ScreenCaptureKit first; falls back to the `screencapture` CLI on
 /// native error or empty output.
+/// Selection capture uses a fresh native plan, excludes child windows, and
+/// validates the retained identity before and after capture. No shell or
+/// display fallback is permitted for this stricter path.
+pub fn screenshot_selected_window_bytes(
+    window_id: u32,
+    pid: i32,
+    selection: &cua_driver_core::selected_windows::SelectedWindows,
+) -> anyhow::Result<Vec<u8>> {
+    let target = cua_driver_core::selected_windows::WindowTarget {
+        pid: i64::from(pid),
+        window_id: u64::from(window_id),
+    };
+    selection.validate(target).map_err(anyhow::Error::msg)?;
+    let facts = crate::ax::exact_target::gather_background_facts(pid, window_id, None);
+    if facts.target_minimized != Some(false) || facts.app_hidden != Some(false) {
+        anyhow::bail!(
+            "selected_window_capture_unavailable: minimized, hidden, or unresolved target"
+        );
+    }
+    let bytes = run_native_capture_worker(
+        native_capture_gate(),
+        WINDOW_CAPTURE_NATIVE_TIMEOUT,
+        move || {
+            let identity = current_window_capture_identity(window_id)?;
+            let plan = build_window_capture_plan(window_id, identity)?;
+            match capture_window_from_plan_validated(window_id, &plan)? {
+                CaptureIdentityValidation::Matched(bytes) => Ok(bytes),
+                CaptureIdentityValidation::Changed(_) => {
+                    anyhow::bail!("selected_window_stale: identity changed during capture")
+                }
+            }
+        },
+    )?;
+    selection.validate(target).map_err(anyhow::Error::msg)?;
+    Ok(bytes)
+}
+
 pub fn screenshot_window_bytes(window_id: u32) -> anyhow::Result<Vec<u8>> {
+    if let Some(context) = cua_driver_core::tool::current_dispatch_authorization_context() {
+        if let Some(selection) = context.selected_windows().map_err(anyhow::Error::msg)? {
+            let target = selection
+                .live_targets()
+                .into_iter()
+                .find(|target| target.window_id == u64::from(window_id))
+                .ok_or_else(|| anyhow::anyhow!("selected_window_denied"))?;
+            return screenshot_selected_window_bytes(window_id, target.pid as i32, selection);
+        }
+    }
     capture_window_with_backends(
         window_id,
         screenshot_window_bytes_sck,

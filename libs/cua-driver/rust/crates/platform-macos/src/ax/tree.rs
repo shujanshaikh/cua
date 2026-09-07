@@ -172,6 +172,19 @@ pub fn walk_tree(pid: i32, window_id: Option<u32>, query: Option<&str>) -> TreeW
     )
 }
 
+thread_local! { static SELECTED_WINDOW: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) }; }
+
+pub fn with_selected_window<T>(window: Option<u32>, action: impl FnOnce() -> T) -> T {
+    struct Restore(Option<u32>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SELECTED_WINDOW.set(self.0);
+        }
+    }
+    let _restore = Restore(SELECTED_WINDOW.replace(window));
+    action()
+}
+
 /// Walk the AX tree with caller-supplied caps. See [`walk_tree`] for the
 /// common case (defaults apply). `max_elements`/`max_depth` clamp the
 /// rendered tree breadth-wise (DFS truncated when the element counter hits
@@ -279,6 +292,11 @@ pub fn walk_tree_bounded(
             let walk = decision
                 .walk
                 .iter()
+                .filter(|&&index| {
+                    SELECTED_WINDOW
+                        .get()
+                        .is_none_or(|wid| candidates[index].ax_window_id == Some(wid))
+                })
                 .map(|&index| top_level[index])
                 .collect();
             window_scope = Some(decision.scope);
@@ -368,6 +386,14 @@ unsafe fn walk_element(
 
     let role = copy_string_attr(element, "AXRole").unwrap_or_else(|| "AXUnknown".into());
 
+    if let Some(window_id) = SELECTED_WINDOW.get() {
+        if role == "AXSheet"
+            || role == "AXMenuBar"
+            || (role == "AXWindow" && ax_get_window_id(element) != Some(window_id))
+        {
+            return;
+        }
+    }
     let in_web_content = in_web_content || is_web_content_role(&role);
 
     // Skip pure layout containers that have no interesting content.

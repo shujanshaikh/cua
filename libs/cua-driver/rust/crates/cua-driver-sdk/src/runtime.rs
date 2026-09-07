@@ -106,7 +106,59 @@ pub(crate) struct RuntimeSession {
     public_session: String,
 }
 
+struct SessionPreview(Option<Box<dyn pip_preview::PipBackend>>);
+impl Drop for SessionPreview {
+    fn drop(&mut self) {
+        if let Some(backend) = self.0.take() {
+            backend.shutdown();
+        }
+    }
+}
+
 impl RuntimeSession {
+    pub(crate) fn close(&self) {
+        self.authorization_registry
+            .revoke_connection(&self.connection);
+        self.authorization_registry.revoke_host(&self.host);
+        let session = self.context.runtime_session_key(&self.public_session);
+        cua_driver_core::pip_hook::clear_session(&session);
+        cua_driver_core::session::end_session(&session);
+    }
+
+    pub(crate) fn attach_preview(
+        &self,
+        backend: Box<dyn pip_preview::PipBackend>,
+    ) -> Result<(), crate::DriverError> {
+        let preview = SessionPreview(Some(backend));
+        if self.context.is_expired() || !self.runtime.is_running() {
+            return Err(crate::DriverError::Shutdown);
+        }
+        if self.context.selected_windows().ok().flatten().is_none() {
+            return Err(crate::DriverError::Configuration {
+                reason: "session preview requires a trusted selected-window session".into(),
+            });
+        }
+        let context = self.context.clone();
+        let session = context.runtime_session_key(&self.public_session);
+        cua_driver_core::pip_hook::set_session_pip_push_fn(session, move |frame| {
+            if !context.is_expired() {
+                preview
+                    .0
+                    .as_ref()
+                    .expect("preview is owned until callback removal")
+                    .push_frame(pip_preview::PipFrame {
+                        png_bytes: frame.png_bytes,
+                        action_label: frame.action_label,
+                        timestamp_ms: frame.timestamp_ms,
+                    });
+            }
+        })
+        .map_err(|reason| crate::DriverError::Configuration {
+            reason: reason.into(),
+        })?;
+        Ok(())
+    }
+
     pub(crate) async fn invoke(&self, name: &str, mut args: Value) -> Option<CoreToolResult> {
         cua_driver_core::tool_args::sanitize_reserved_args(&mut args);
         let Some(arguments) = args.as_object_mut() else {
@@ -146,9 +198,7 @@ impl RuntimeSession {
 
 impl Drop for RuntimeSession {
     fn drop(&mut self) {
-        self.authorization_registry
-            .revoke_connection(&self.connection);
-        self.authorization_registry.revoke_host(&self.host);
+        self.close();
     }
 }
 
@@ -196,6 +246,9 @@ impl DriverRuntime {
             compatibility_context.runtime_scope_key(),
             || build_registry(&options),
         ));
+        registry
+            .bind_selected_windows(&compatibility_context)
+            .map_err(RuntimeCreateError::Authorization)?;
         registry.init_self_weak();
         let runtime = Arc::new(Self {
             registry,
@@ -408,6 +461,10 @@ impl DriverRuntime {
             &public_session,
             &transport_session,
         )?;
+        if let Err(error) = self.registry.bind_selected_windows(&context) {
+            self.authorization_registry.revoke_host(&host);
+            return Err(SessionAuthorizationError::WindowSelection(error));
+        }
         Ok(Arc::new(RuntimeSession {
             runtime: self.clone(),
             authorization_registry: self.authorization_registry.clone(),
@@ -513,6 +570,10 @@ fn spawn_lifecycle_maintenance(runtime: &Arc<DriverRuntime>) -> LifecycleMainten
         };
         if !runtime.is_running() {
             break;
+        }
+        for session in runtime.authorization_registry.reap_expired_sessions() {
+            cua_driver_core::pip_hook::clear_session(&session);
+            cua_driver_core::session::end_session(&session);
         }
         let ended = cua_driver_core::session::evict_idle_with_prefix(
             session_ttl,

@@ -236,7 +236,9 @@ impl TokenRegistry {
     pub fn clear_runtime_scope(&self, runtime_scope: &str) -> usize {
         let mut entries = self.by_runtime_and_pid.lock().unwrap();
         let before = entries.len();
-        entries.retain(|(scope, _), _| scope != runtime_scope);
+        let session_prefix = format!("__cua_runtime_{runtime_scope}:");
+        entries
+            .retain(|(scope, _), _| scope != runtime_scope && !scope.starts_with(&session_prefix));
         before - entries.len()
     }
 
@@ -281,7 +283,9 @@ impl TokenRegistry {
 }
 
 fn current_runtime_scope() -> String {
-    crate::tool::current_dispatch_runtime_scope().unwrap_or_else(|| "legacy".to_owned())
+    crate::tool::current_selected_observation_scope()
+        .or_else(crate::tool::current_dispatch_runtime_scope)
+        .unwrap_or_else(|| "legacy".to_owned())
 }
 
 impl Default for TokenRegistry {

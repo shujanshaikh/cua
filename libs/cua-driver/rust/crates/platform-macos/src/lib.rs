@@ -37,6 +37,8 @@ pub mod recording_hooks;
 #[cfg(target_os = "macos")]
 pub mod session;
 #[cfg(target_os = "macos")]
+pub mod spaces;
+#[cfg(target_os = "macos")]
 pub mod terminal;
 #[cfg(target_os = "macos")]
 pub mod tools;
@@ -154,3 +156,6 @@ mod cursor_overlay_host_tests {
         assert!(!cursor_overlay_facility_available(false, false));
     }
 }
+
+#[cfg(target_os = "macos")]
+mod selected_windows;

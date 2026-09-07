@@ -864,7 +864,9 @@ pub unsafe extern "C" fn cua_driver_session_destroy_v1(handle: *mut *mut CuaDriv
         };
         let owned = std::mem::replace(handle, ptr::null_mut());
         if !owned.is_null() {
-            drop(Box::from_raw(owned));
+            let handle = Box::from_raw(owned);
+            handle.session.close();
+            drop(handle);
         }
     }));
 }
@@ -1478,6 +1480,26 @@ unsafe impl Send for NativeAbiSession {}
 unsafe impl Sync for NativeAbiSession {}
 
 impl NativeAbiSession {
+    pub(crate) fn attach_preview(
+        &self,
+        backend: Box<dyn pip_preview::PipBackend>,
+    ) -> Result<(), DriverError> {
+        let handle = self.handle.lock().unwrap();
+        if handle.is_null() {
+            backend.shutdown();
+            return Err(DriverError::Shutdown);
+        }
+        // Keep the native handle retained through host-only registration.
+        unsafe {
+            handle
+                .cast::<CuaDriverSessionHandle>()
+                .as_ref()
+                .expect("live handle")
+                .session
+                .attach_preview(backend)
+        }
+    }
+
     pub(crate) fn close(&self) {
         let mut handle = self.handle.lock().unwrap();
         unsafe { ffi::session_destroy(&mut *handle) };

@@ -997,6 +997,45 @@ const FfiConverterTypeClipboardWriteOutput = (() => {
     return new FFIConverter();
 })();
 
+export type CreateWorkspaceInput = {
+    session?: string
+}
+
+/**
+ * Generated factory for {@link CreateWorkspaceInput} record objects.
+ */
+export const CreateWorkspaceInput = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<CreateWorkspaceInput, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        create,
+        new: create,
+        defaults: () => Object.freeze(defaults()) as Partial<CreateWorkspaceInput>,
+    });
+})();
+
+const FfiConverterTypeCreateWorkspaceInput = (() => {
+    type TypeName = CreateWorkspaceInput;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                session: FfiConverterOptionalString.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterOptionalString.write(value.session, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterOptionalString.allocationSize(value.session);
+
+        }
+    };
+    return new FFIConverter();
+})();
+
 export type CursorMotionOutput = {
     startHandle: number,
     endHandle: number,
@@ -1353,6 +1392,45 @@ const FfiConverterTypeCursorVisualOutput = (() => {
              FfiConverterString.allocationSize(value.phase) +
              FfiConverterUInt64.allocationSize(value.frame) +
              FfiConverterUInt64.allocationSize(value.preemptedCount);
+
+        }
+    };
+    return new FFIConverter();
+})();
+
+export type DeleteWorkspaceInput = {
+    session?: string
+}
+
+/**
+ * Generated factory for {@link DeleteWorkspaceInput} record objects.
+ */
+export const DeleteWorkspaceInput = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<DeleteWorkspaceInput, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        create,
+        new: create,
+        defaults: () => Object.freeze(defaults()) as Partial<DeleteWorkspaceInput>,
+    });
+})();
+
+const FfiConverterTypeDeleteWorkspaceInput = (() => {
+    type TypeName = DeleteWorkspaceInput;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                session: FfiConverterOptionalString.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterOptionalString.write(value.session, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterOptionalString.allocationSize(value.session);
 
         }
     };
@@ -2047,6 +2125,45 @@ const FfiConverterTypeGetSessionStateInput = (() => {
     return new FFIConverter();
 })();
 
+export type GetWorkspaceStateInput = {
+    session?: string
+}
+
+/**
+ * Generated factory for {@link GetWorkspaceStateInput} record objects.
+ */
+export const GetWorkspaceStateInput = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<GetWorkspaceStateInput, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        create,
+        new: create,
+        defaults: () => Object.freeze(defaults()) as Partial<GetWorkspaceStateInput>,
+    });
+})();
+
+const FfiConverterTypeGetWorkspaceStateInput = (() => {
+    type TypeName = GetWorkspaceStateInput;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                session: FfiConverterOptionalString.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterOptionalString.write(value.session, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterOptionalString.allocationSize(value.session);
+
+        }
+    };
+    return new FFIConverter();
+})();
+
 export type HotkeyInput = {
     keys: Array<string>,
     target?: ActionTarget,
@@ -2502,6 +2619,53 @@ const FfiConverterTypeMoveCursorInput = (() => {
     return new FFIConverter();
 })();
 
+export type MoveWindowToWorkspaceInput = {
+    session?: string,
+    pid: bigint,
+    windowId: bigint
+}
+
+/**
+ * Generated factory for {@link MoveWindowToWorkspaceInput} record objects.
+ */
+export const MoveWindowToWorkspaceInput = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<MoveWindowToWorkspaceInput, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        create,
+        new: create,
+        defaults: () => Object.freeze(defaults()) as Partial<MoveWindowToWorkspaceInput>,
+    });
+})();
+
+const FfiConverterTypeMoveWindowToWorkspaceInput = (() => {
+    type TypeName = MoveWindowToWorkspaceInput;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                session: FfiConverterOptionalString.read(from),
+                pid: FfiConverterInt64.read(from),
+                windowId: FfiConverterUInt64.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterOptionalString.write(value.session, into);
+            FfiConverterInt64.write(value.pid, into);
+            FfiConverterUInt64.write(value.windowId, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterOptionalString.allocationSize(value.session) +
+             FfiConverterInt64.allocationSize(value.pid) +
+             FfiConverterUInt64.allocationSize(value.windowId);
+
+        }
+    };
+    return new FFIConverter();
+})();
+
 export enum VerificationStatus {
     Satisfied,
     Unsatisfied,
@@ -2688,6 +2852,123 @@ const FfiConverterTypePressKeyInput = (() => {
              FfiConverterOptionalTypeDesktopScope.allocationSize(value.scope) +
              FfiConverterOptionalString.allocationSize(value.session) +
              FfiConverterOptionalSequenceString.allocationSize(value.modifiers);
+
+        }
+    };
+    return new FFIConverter();
+})();
+
+export type ReleaseWorkspaceInput = {
+    session?: string
+}
+
+/**
+ * Generated factory for {@link ReleaseWorkspaceInput} record objects.
+ */
+export const ReleaseWorkspaceInput = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<ReleaseWorkspaceInput, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        create,
+        new: create,
+        defaults: () => Object.freeze(defaults()) as Partial<ReleaseWorkspaceInput>,
+    });
+})();
+
+const FfiConverterTypeReleaseWorkspaceInput = (() => {
+    type TypeName = ReleaseWorkspaceInput;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                session: FfiConverterOptionalString.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterOptionalString.write(value.session, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterOptionalString.allocationSize(value.session);
+
+        }
+    };
+    return new FFIConverter();
+})();
+
+export type RestoreWorkspaceWindowsInput = {
+    session?: string
+}
+
+/**
+ * Generated factory for {@link RestoreWorkspaceWindowsInput} record objects.
+ */
+export const RestoreWorkspaceWindowsInput = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<RestoreWorkspaceWindowsInput, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        create,
+        new: create,
+        defaults: () => Object.freeze(defaults()) as Partial<RestoreWorkspaceWindowsInput>,
+    });
+})();
+
+const FfiConverterTypeRestoreWorkspaceWindowsInput = (() => {
+    type TypeName = RestoreWorkspaceWindowsInput;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                session: FfiConverterOptionalString.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterOptionalString.write(value.session, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterOptionalString.allocationSize(value.session);
+
+        }
+    };
+    return new FFIConverter();
+})();
+
+export type RevealWorkspaceInput = {
+    session?: string
+}
+
+/**
+ * Generated factory for {@link RevealWorkspaceInput} record objects.
+ */
+export const RevealWorkspaceInput = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<RevealWorkspaceInput, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        create,
+        new: create,
+        defaults: () => Object.freeze(defaults()) as Partial<RevealWorkspaceInput>,
+    });
+})();
+
+const FfiConverterTypeRevealWorkspaceInput = (() => {
+    type TypeName = RevealWorkspaceInput;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                session: FfiConverterOptionalString.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterOptionalString.write(value.session, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterOptionalString.allocationSize(value.session);
 
         }
     };
@@ -3724,6 +4005,124 @@ const FfiConverterTypeVerifyStateOutput = (() => {
     return new FFIConverter();
 })();
 
+export type WorkspaceWindowState = {
+    pid: bigint,
+    windowId: bigint,
+    originalSpaceIds: Array<bigint>,
+    currentSpaceIds: Array<bigint>,
+    state: string
+}
+
+/**
+ * Generated factory for {@link WorkspaceWindowState} record objects.
+ */
+export const WorkspaceWindowState = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<WorkspaceWindowState, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        create,
+        new: create,
+        defaults: () => Object.freeze(defaults()) as Partial<WorkspaceWindowState>,
+    });
+})();
+
+const FfiConverterTypeWorkspaceWindowState = (() => {
+    type TypeName = WorkspaceWindowState;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                pid: FfiConverterInt64.read(from),
+                windowId: FfiConverterUInt64.read(from),
+                originalSpaceIds: FfiConverterSequenceUInt64.read(from),
+                currentSpaceIds: FfiConverterSequenceUInt64.read(from),
+                state: FfiConverterString.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterInt64.write(value.pid, into);
+            FfiConverterUInt64.write(value.windowId, into);
+            FfiConverterSequenceUInt64.write(value.originalSpaceIds, into);
+            FfiConverterSequenceUInt64.write(value.currentSpaceIds, into);
+            FfiConverterString.write(value.state, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterInt64.allocationSize(value.pid) +
+             FfiConverterUInt64.allocationSize(value.windowId) +
+             FfiConverterSequenceUInt64.allocationSize(value.originalSpaceIds) +
+             FfiConverterSequenceUInt64.allocationSize(value.currentSpaceIds) +
+             FfiConverterString.allocationSize(value.state);
+
+        }
+    };
+    return new FFIConverter();
+})();
+
+export type WorkspaceStateOutput = {
+    owned: boolean,
+    spaceId?: bigint,
+    spaceCreated: boolean,
+    spaceExists: boolean,
+    active: boolean,
+    privateApi: boolean,
+    windows: Array<WorkspaceWindowState>
+}
+
+/**
+ * Generated factory for {@link WorkspaceStateOutput} record objects.
+ */
+export const WorkspaceStateOutput = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<WorkspaceStateOutput, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        create,
+        new: create,
+        defaults: () => Object.freeze(defaults()) as Partial<WorkspaceStateOutput>,
+    });
+})();
+
+const FfiConverterTypeWorkspaceStateOutput = (() => {
+    type TypeName = WorkspaceStateOutput;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                owned: FfiConverterBool.read(from),
+                spaceId: FfiConverterOptionalUInt64.read(from),
+                spaceCreated: FfiConverterBool.read(from),
+                spaceExists: FfiConverterBool.read(from),
+                active: FfiConverterBool.read(from),
+                privateApi: FfiConverterBool.read(from),
+                windows: FfiConverterSequenceTypeWorkspaceWindowState.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterBool.write(value.owned, into);
+            FfiConverterOptionalUInt64.write(value.spaceId, into);
+            FfiConverterBool.write(value.spaceCreated, into);
+            FfiConverterBool.write(value.spaceExists, into);
+            FfiConverterBool.write(value.active, into);
+            FfiConverterBool.write(value.privateApi, into);
+            FfiConverterSequenceTypeWorkspaceWindowState.write(value.windows, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterBool.allocationSize(value.owned) +
+             FfiConverterOptionalUInt64.allocationSize(value.spaceId) +
+             FfiConverterBool.allocationSize(value.spaceCreated) +
+             FfiConverterBool.allocationSize(value.spaceExists) +
+             FfiConverterBool.allocationSize(value.active) +
+             FfiConverterBool.allocationSize(value.privateApi) +
+             FfiConverterSequenceTypeWorkspaceWindowState.allocationSize(value.windows);
+
+        }
+    };
+    return new FFIConverter();
+})();
+
 export enum Platform {
     Macos,
     Windows,
@@ -3834,6 +4233,12 @@ const FfiConverterSequenceTypeStatePredicate = new FfiConverterArray(FfiConverte
 // FfiConverter for Array<PredicateOutcome>
 const FfiConverterSequenceTypePredicateOutcome = new FfiConverterArray(FfiConverterTypePredicateOutcome);
 
+// FfiConverter for Array<bigint>
+const FfiConverterSequenceUInt64 = new FfiConverterArray(FfiConverterUInt64);
+
+// FfiConverter for Array<WorkspaceWindowState>
+const FfiConverterSequenceTypeWorkspaceWindowState = new FfiConverterArray(FfiConverterTypeWorkspaceWindowState);
+
 
 /**
  * This should be called before anything else.
@@ -3878,6 +4283,7 @@ export default Object.freeze({
     FfiConverterTypeClipboardReadOutput,
     FfiConverterTypeClipboardWriteInput,
     FfiConverterTypeClipboardWriteOutput,
+    FfiConverterTypeCreateWorkspaceInput,
     FfiConverterTypeCursorAction,
     FfiConverterTypeCursorMotionOutput,
     FfiConverterTypeCursorPointOutput,
@@ -3885,6 +4291,7 @@ export default Object.freeze({
     FfiConverterTypeCursorThemeOutput,
     FfiConverterTypeCursorThemeSelection,
     FfiConverterTypeCursorVisualOutput,
+    FfiConverterTypeDeleteWorkspaceInput,
     FfiConverterTypeDesktopScope,
     FfiConverterTypeDragInput,
     FfiConverterTypeEffectiveScope,
@@ -3901,14 +4308,19 @@ export default Object.freeze({
     FfiConverterTypeGetScreenSizeInput,
     FfiConverterTypeGetSessionInput,
     FfiConverterTypeGetSessionStateInput,
+    FfiConverterTypeGetWorkspaceStateInput,
     FfiConverterTypeHotkeyInput,
     FfiConverterTypeInvokeMenuInput,
     FfiConverterTypeListSessionsInput,
     FfiConverterTypeListSessionsOutput,
     FfiConverterTypeMoveCursorInput,
+    FfiConverterTypeMoveWindowToWorkspaceInput,
     FfiConverterTypePlatform,
     FfiConverterTypePredicateOutcome,
     FfiConverterTypePressKeyInput,
+    FfiConverterTypeReleaseWorkspaceInput,
+    FfiConverterTypeRestoreWorkspaceWindowsInput,
+    FfiConverterTypeRevealWorkspaceInput,
     FfiConverterTypeScrollBy,
     FfiConverterTypeScrollDirection,
     FfiConverterTypeScrollInput,
@@ -3933,5 +4345,7 @@ export default Object.freeze({
     FfiConverterTypeVerifyStateInput,
     FfiConverterTypeVerifyStateOutput,
     FfiConverterTypeWindowPredicate,
+    FfiConverterTypeWorkspaceStateOutput,
+    FfiConverterTypeWorkspaceWindowState,
   }
 });

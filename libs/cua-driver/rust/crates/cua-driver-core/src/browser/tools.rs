@@ -170,6 +170,7 @@ pub(crate) async fn browser_protected_resource_scope(
         "target_id": target_id,
         "tab_id": tab_id,
         "pid": target.pid,
+        "window_id": target.window_id,
         "process_fingerprint": target.fingerprint,
         "binding_generation": target.generation,
         "cdp_target_id": tab.cdp_target_id,

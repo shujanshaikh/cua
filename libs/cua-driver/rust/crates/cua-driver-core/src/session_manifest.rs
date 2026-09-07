@@ -44,6 +44,8 @@ pub struct SessionManifest {
     desktop_applications: HashSet<i64>,
     desktop_windows: HashSet<(i64, u64)>,
     desktop_display: bool,
+    selected_windows_only: bool,
+    workspace_space_id: Option<u64>,
     readable_paths: HashSet<String>,
     writable_paths: HashSet<String>,
     readable_roots: Vec<PathGrant>,
@@ -79,6 +81,19 @@ struct PathGrant {
 }
 
 impl SessionManifest {
+    pub fn workspace_space_id(&self) -> Option<u64> {
+        self.workspace_space_id
+    }
+
+    pub fn selected_window_targets(&self) -> Option<Vec<crate::selected_windows::WindowTarget>> {
+        self.selected_windows_only.then(|| {
+            self.desktop_windows
+                .iter()
+                .map(|&(pid, window_id)| crate::selected_windows::WindowTarget { pid, window_id })
+                .collect()
+        })
+    }
+
     pub fn version(&self) -> u32 {
         self.version
     }
@@ -607,6 +622,10 @@ struct RawExistingProfile {
 #[serde(deny_unknown_fields)]
 struct RawDesktopResources {
     #[serde(default)]
+    workspace_space_id: Option<u64>,
+    #[serde(default)]
+    selected_windows_only: bool,
+    #[serde(default)]
     applications: Vec<i64>,
     #[serde(default)]
     windows: Vec<RawDesktopWindow>,
@@ -781,6 +800,8 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             origins: raw_browser_origins,
         } = browser;
         let RawDesktopResources {
+            workspace_space_id,
+            selected_windows_only,
             applications: raw_desktop_applications,
             windows: raw_desktop_windows,
             display: desktop_display,
@@ -918,6 +939,15 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
                     .to_owned(),
             );
         }
+        if (selected_windows_only || workspace_space_id.is_some()) && version != 3 {
+            return Err("selected-window workspaces require capability manifest version 3".into());
+        }
+        if workspace_space_id.is_some() && (!selected_windows_only || workspace_space_id == Some(0))
+        {
+            return Err(
+                "workspace_space_id requires selected_windows_only and a positive Space id".into(),
+            );
+        }
         let applications = validate_applications(raw_applications)?;
         let mut desktop_windows = HashSet::new();
         for window in raw_desktop_windows {
@@ -1027,6 +1057,8 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             desktop_applications,
             desktop_windows,
             desktop_display,
+            workspace_space_id,
+            selected_windows_only,
             readable_paths,
             writable_paths,
             readable_roots,
@@ -1365,6 +1397,33 @@ mod tests {
         let path = dir.path().join("manifest.yaml");
         std::fs::write(&path, source).unwrap();
         load_manifest(&path)
+    }
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn selected_windows_are_explicit_v3_configuration_and_empty_means_no_access() {
+        let source = r#"{"version":3,"resources":{"desktop":{"selected_windows_only":true,"windows":[{"pid":10,"window_id":20}],"workspace_space_id":100}},"allow":{"tools":["get_window_state"]}}"#;
+        let loaded = manifest(source).unwrap();
+        assert_eq!(
+            loaded.selected_window_targets().unwrap(),
+            vec![crate::selected_windows::WindowTarget {
+                pid: 10,
+                window_id: 20
+            }]
+        );
+        assert_eq!(loaded.workspace_space_id(), Some(100));
+        assert!(manifest(&source.replace("\"version\":3", "\"version\":2")).is_err());
+        assert!(manifest(&source.replace(
+            "\"selected_windows_only\":true",
+            "\"selected_windows_only\":false"
+        ))
+        .is_err());
+        assert!(manifest(
+            &source.replace("\"workspace_space_id\":100", "\"workspace_space_id\":0")
+        )
+        .is_err());
+        let empty = manifest(r#"{"version":3,"resources":{"desktop":{"selected_windows_only":true}},"allow":{"tools":["get_window_state"]}}"#).unwrap();
+        assert_eq!(empty.selected_window_targets(), Some(vec![]));
     }
 
     #[cfg(feature = "yaml")]

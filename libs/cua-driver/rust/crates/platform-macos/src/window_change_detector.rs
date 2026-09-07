@@ -79,6 +79,9 @@ pub struct Snapshot {
     window_ids: HashSet<u32>,
     front_pid: Option<i32>,
     _lease: Option<SuppressionLease>,
+    selection_context: Option<
+        std::sync::Arc<cua_driver_core::session_authorization::EffectiveAuthorizationContext>,
+    >,
 }
 
 /// Result of `detect()` — what changed during the action window.
@@ -235,6 +238,8 @@ impl WindowChangeDetector {
             window_ids,
             front_pid: prior_front,
             _lease: lease,
+            selection_context: cua_driver_core::tool::current_dispatch_authorization_context()
+                .filter(|context| context.selected_windows().ok().flatten().is_some()),
         }
     }
 }
@@ -284,6 +289,23 @@ impl Snapshot {
             let new_windows: Vec<WindowEvent> = current
                 .iter()
                 .filter(|w| !self.window_ids.contains(&w.window_id))
+                .filter(|w| {
+                    self.selection_context.as_ref().is_none_or(|context| {
+                        !context.is_revoked()
+                            && context
+                                .selected_windows()
+                                .ok()
+                                .flatten()
+                                .is_some_and(|selection| {
+                                    selection
+                                        .validate(cua_driver_core::selected_windows::WindowTarget {
+                                            pid: i64::from(w.pid),
+                                            window_id: u64::from(w.window_id),
+                                        })
+                                        .is_ok()
+                                })
+                    })
+                })
                 .map(|w| WindowEvent {
                     window_id: w.window_id,
                     pid: w.pid,

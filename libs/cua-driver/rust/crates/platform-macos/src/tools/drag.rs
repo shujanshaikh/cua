@@ -111,6 +111,7 @@ impl Tool for DragTool {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
+        let call_state = self.state.for_call();
         use cua_driver_core::tool_args::ArgsExt;
         let cursor_key = super::cursor_tools::resolve_cursor_key(&args);
         if args.opt_str("scope").as_deref() == Some("desktop")
@@ -162,7 +163,7 @@ impl Tool for DragTool {
                 cursor_overlay::OverlayCommand::SetPressed(false),
             );
             if matches!(&result, Ok(Ok(()))) {
-                self.state
+                call_state
                     .cursor_registry
                     .update_position(&cursor_key, to_x, to_y);
             }
@@ -238,7 +239,7 @@ impl Tool for DragTool {
 
         // from_zoom: translate from last zoom crop context.
         if from_zoom {
-            match self.state.zoom_registry.get(pid) {
+            match call_state.zoom_registry.get(pid) {
                 Some(ctx) => {
                     let (wx, wy) = ctx.zoom_to_window(from_x, from_y);
                     let (wx2, wy2) = ctx.zoom_to_window(to_x, to_y);
@@ -253,7 +254,7 @@ impl Tool for DragTool {
                     ))
                 }
             }
-        } else if let Some(ratio) = self.state.resize_registry.ratio(pid, window_id) {
+        } else if let Some(ratio) = call_state.resize_registry.ratio(pid, window_id) {
             from_x *= ratio;
             from_y *= ratio;
             to_x *= ratio;
@@ -390,7 +391,7 @@ impl Tool for DragTool {
             cursor_overlay::OverlayCommand::SetPressed(false),
         );
         if matches!(&result, Ok(Ok(()))) {
-            self.state
+            call_state
                 .cursor_registry
                 .update_position(&cursor_key, to_sx, to_sy);
         }

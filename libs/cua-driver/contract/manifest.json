@@ -394,6 +394,236 @@
       }
     },
     {
+      "name": "create_workspace",
+      "description": "Create a session-owned agent Space without revealing it. Requires a trusted selected-window session. When trusted configuration supplies an existing Space, attach to it and report space_created=false. Private native operations must verify their postconditions; unsupported platforms refuse.",
+      "platforms": [
+        "macos",
+        "windows",
+        "linux"
+      ],
+      "capabilities": [
+        "session.workspace"
+      ],
+      "annotations": {
+        "read_only": false,
+        "destructive": false,
+        "idempotent": false,
+        "open_world": false
+      },
+      "schema_mode": "canonical_runtime",
+      "cursor_semantics": {
+        "action": "system"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "success_output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "owned": {
+            "type": "boolean"
+          },
+          "private_api": {
+            "type": "boolean"
+          },
+          "space_created": {
+            "type": "boolean"
+          },
+          "space_exists": {
+            "type": "boolean"
+          },
+          "space_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "windows": {
+            "items": {
+              "properties": {
+                "current_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "original_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "pid": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pid",
+                "window_id",
+                "original_space_ids",
+                "current_space_ids",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "owned",
+          "space_created",
+          "space_exists",
+          "active",
+          "private_api",
+          "windows"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "delete_workspace",
+      "description": "Explicitly delete an empty Space created by this session. Never delete a pre-existing Space or close applications. Unsupported native deletion refuses.",
+      "platforms": [
+        "macos",
+        "windows",
+        "linux"
+      ],
+      "capabilities": [
+        "session.workspace"
+      ],
+      "annotations": {
+        "read_only": false,
+        "destructive": true,
+        "idempotent": true,
+        "open_world": false
+      },
+      "schema_mode": "canonical_runtime",
+      "cursor_semantics": {
+        "action": "system"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "success_output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "owned": {
+            "type": "boolean"
+          },
+          "private_api": {
+            "type": "boolean"
+          },
+          "space_created": {
+            "type": "boolean"
+          },
+          "space_exists": {
+            "type": "boolean"
+          },
+          "space_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "windows": {
+            "items": {
+              "properties": {
+                "current_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "original_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "pid": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pid",
+                "window_id",
+                "original_space_ids",
+                "current_space_ids",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "owned",
+          "space_created",
+          "space_exists",
+          "active",
+          "private_api",
+          "windows"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "drag",
       "description": "Drag between two absolute points in get_desktop_state coordinates.",
       "platforms": [
@@ -1424,6 +1654,121 @@
       }
     },
     {
+      "name": "get_workspace_state",
+      "description": "Read the current session's workspace ownership and approved window membership. Reports user movement, stale windows and deleted Spaces without capturing a display.",
+      "platforms": [
+        "macos",
+        "windows",
+        "linux"
+      ],
+      "capabilities": [
+        "session.workspace"
+      ],
+      "annotations": {
+        "read_only": true,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": false
+      },
+      "schema_mode": "canonical_runtime",
+      "cursor_semantics": {
+        "action": "system"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "success_output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "owned": {
+            "type": "boolean"
+          },
+          "private_api": {
+            "type": "boolean"
+          },
+          "space_created": {
+            "type": "boolean"
+          },
+          "space_exists": {
+            "type": "boolean"
+          },
+          "space_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "windows": {
+            "items": {
+              "properties": {
+                "current_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "original_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "pid": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pid",
+                "window_id",
+                "original_space_ids",
+                "current_space_ids",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "owned",
+          "space_created",
+          "space_exists",
+          "active",
+          "private_api",
+          "windows"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "hotkey",
       "description": "Press a key chord in the foreground desktop application.",
       "platforms": [
@@ -2161,6 +2506,133 @@
       }
     },
     {
+      "name": "move_window_to_workspace",
+      "description": "Move an already-approved exact window into this session's workspace and verify membership. Moving never grants access and never switches Spaces.",
+      "platforms": [
+        "macos",
+        "windows",
+        "linux"
+      ],
+      "capabilities": [
+        "session.workspace"
+      ],
+      "annotations": {
+        "read_only": false,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": false
+      },
+      "schema_mode": "canonical_runtime",
+      "cursor_semantics": {
+        "action": "system"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "pid": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "window_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pid",
+          "window_id"
+        ],
+        "type": "object"
+      },
+      "success_output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "owned": {
+            "type": "boolean"
+          },
+          "private_api": {
+            "type": "boolean"
+          },
+          "space_created": {
+            "type": "boolean"
+          },
+          "space_exists": {
+            "type": "boolean"
+          },
+          "space_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "windows": {
+            "items": {
+              "properties": {
+                "current_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "original_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "pid": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pid",
+                "window_id",
+                "original_space_ids",
+                "current_space_ids",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "owned",
+          "space_created",
+          "space_exists",
+          "active",
+          "private_api",
+          "windows"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "press_key",
       "description": "Press one key, with optional modifiers, in the foreground desktop application.",
       "platforms": [
@@ -2373,6 +2845,351 @@
         "required": [
           "effect",
           "route"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "release_workspace",
+      "description": "Release this session's workspace ownership. Preserve applications, windows and Spaces. Releasing ownership does not change access approval.",
+      "platforms": [
+        "macos",
+        "windows",
+        "linux"
+      ],
+      "capabilities": [
+        "session.workspace"
+      ],
+      "annotations": {
+        "read_only": false,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": false
+      },
+      "schema_mode": "canonical_runtime",
+      "cursor_semantics": {
+        "action": "system"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "success_output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "owned": {
+            "type": "boolean"
+          },
+          "private_api": {
+            "type": "boolean"
+          },
+          "space_created": {
+            "type": "boolean"
+          },
+          "space_exists": {
+            "type": "boolean"
+          },
+          "space_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "windows": {
+            "items": {
+              "properties": {
+                "current_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "original_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "pid": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pid",
+                "window_id",
+                "original_space_ids",
+                "current_space_ids",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "owned",
+          "space_created",
+          "space_exists",
+          "active",
+          "private_api",
+          "windows"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "restore_workspace_windows",
+      "description": "Explicitly restore windows moved by this workspace to their recorded original Spaces. Refuse to override subsequent user movement; report partial failures. Never switch Spaces.",
+      "platforms": [
+        "macos",
+        "windows",
+        "linux"
+      ],
+      "capabilities": [
+        "session.workspace"
+      ],
+      "annotations": {
+        "read_only": false,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": false
+      },
+      "schema_mode": "canonical_runtime",
+      "cursor_semantics": {
+        "action": "system"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "success_output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "owned": {
+            "type": "boolean"
+          },
+          "private_api": {
+            "type": "boolean"
+          },
+          "space_created": {
+            "type": "boolean"
+          },
+          "space_exists": {
+            "type": "boolean"
+          },
+          "space_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "windows": {
+            "items": {
+              "properties": {
+                "current_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "original_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "pid": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pid",
+                "window_id",
+                "original_space_ids",
+                "current_space_ids",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "owned",
+          "space_created",
+          "space_exists",
+          "active",
+          "private_api",
+          "windows"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "reveal_workspace",
+      "description": "Explicitly switch to this session's workspace. This is the only workspace operation that may switch the user's active Space.",
+      "platforms": [
+        "macos",
+        "windows",
+        "linux"
+      ],
+      "capabilities": [
+        "session.workspace"
+      ],
+      "annotations": {
+        "read_only": false,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": false
+      },
+      "schema_mode": "canonical_runtime",
+      "cursor_semantics": {
+        "action": "system"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "success_output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "owned": {
+            "type": "boolean"
+          },
+          "private_api": {
+            "type": "boolean"
+          },
+          "space_created": {
+            "type": "boolean"
+          },
+          "space_exists": {
+            "type": "boolean"
+          },
+          "space_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "windows": {
+            "items": {
+              "properties": {
+                "current_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "original_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "pid": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pid",
+                "window_id",
+                "original_space_ids",
+                "current_space_ids",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "owned",
+          "space_created",
+          "space_exists",
+          "active",
+          "private_api",
+          "windows"
         ],
         "type": "object"
       }

@@ -202,11 +202,15 @@ impl Tool for StopRecordingTool {
         })
     }
 
-    async fn invoke(&self, _args: Value) -> ToolResult {
+    async fn invoke(&self, args: Value) -> ToolResult {
+        let selected_owner = crate::tool::current_selected_observation_scope();
+        let requester = selected_owner
+            .as_ref()
+            .and_then(|_| args.get("_session_id").and_then(Value::as_str));
         // Manual stop is unconditional — `None` requester tears down whatever
         // recording is active. Session-scoped teardown is driven by the
         // registry-owned session-end hook, which calls `stop_owner(sid)`.
-        match self.session.stop_owner(None) {
+        match self.session.stop_owner(requester) {
             Ok(()) => {
                 let state = self.session.current_state();
                 let video_note = state
