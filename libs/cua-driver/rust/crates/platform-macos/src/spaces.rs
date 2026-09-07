@@ -390,6 +390,7 @@ impl cua_driver_core::workspace::WorkspaceBackend for MacosWorkspaces {
         Ok(())
     }
     fn delete(&self, space: u64) -> Result<(), String> {
+        let _overlay = crate::cursor::overlay::suspend_workspace_panel(space);
         mission_control::delete(space)
     }
     fn reveal(&self, space: u64) -> Result<(), String> {

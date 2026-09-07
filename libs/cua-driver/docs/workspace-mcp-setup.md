@@ -67,3 +67,18 @@ Native Space creation remains macOS-only. Windows and Linux return the existing
 explicit unsupported result. Inactive screenshot capture can still time out,
 and apps that need activation to create their first window remain unsupported.
 Accessibility readback can work even when a screenshot is unavailable.
+
+## Workspace cursors
+
+Each macOS workspace has its own click-through cursor overlay window. The driver
+verifies its Space membership before displaying cursor pixels. Workspace cursors
+are excluded from the global overlay, including while a workspace is being
+created or released. Ending a session removes its panel; deleting an empty Space
+first removes its decorative panel. Other sessions keep their own overlays.
+
+The shared renderer rejects workspace pixels on global or mismatched surfaces.
+Windows and Linux continue to refuse native workspace creation; their global
+renderers also suppress workspace-only cursor pixels. Native placement uses the
+same private macOS Space APIs as workspace windows. Visual placement requires
+checking the installed candidate on macOS; unit tests cover pixel isolation and
+existing cursor/session behavior.

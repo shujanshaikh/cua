@@ -82,6 +82,8 @@ pub struct RenderStateCore {
     pub idle_alpha: f64,
     /// Window id the overlay should be pinned above (for z-ordering).
     pub pinned_wid: Option<u64>,
+    pub workspace_only: bool,
+    pub workspace_space_id: Option<u64>,
     /// Sanitized caller-facing label painted below the cursor.
     pub session_label: Option<String>,
     /// Elapsed time since the session label was revealed with the cursor.
@@ -138,6 +140,8 @@ impl RenderStateCore {
             idle_secs: 0.0,
             idle_alpha: 1.0,
             pinned_wid: None,
+            workspace_only: false,
+            workspace_space_id: None,
             session_label: None,
             session_badge_secs: SESSION_BADGE_HOLD_SECS + SESSION_BADGE_FADE_SECS,
             session_badge_hovered: false,
@@ -725,6 +729,14 @@ impl RenderStateCore {
                 }
                 true
             }
+            OverlayCommand::SetWorkspace {
+                workspace_only,
+                space_id,
+            } => {
+                self.workspace_only = workspace_only;
+                self.workspace_space_id = space_id;
+                true
+            }
             OverlayCommand::SetSessionLabel(label) => {
                 let session_label = crate::sanitize_session_label(&label);
                 if session_label != self.session_label {
@@ -810,6 +822,36 @@ pub fn paint_cursor(
     focus_rect: Option<FocusRect>,
     backing_scale: f32,
 ) {
+    paint_cursor_on_surface(
+        pm,
+        core,
+        origin_x,
+        origin_y,
+        focus_rect,
+        backing_scale,
+        None,
+    );
+}
+
+/// Paint only on the cursor's assigned desktop surface. Platform adapters that
+/// have no native workspace support use `paint_cursor`, which cannot leak a
+/// workspace-only cursor onto the global desktop.
+pub fn paint_cursor_on_surface(
+    pm: &mut tiny_skia::Pixmap,
+    core: &RenderStateCore,
+    origin_x: f64,
+    origin_y: f64,
+    focus_rect: Option<FocusRect>,
+    backing_scale: f32,
+    workspace: Option<u64>,
+) {
+    if core.workspace_only {
+        if core.workspace_space_id.is_none() || core.workspace_space_id != workspace {
+            return;
+        }
+    } else if workspace.is_some() {
+        return;
+    }
     if !core.visible || core.pos.0 < -100.0 || core.idle_alpha < 0.004 {
         return;
     }
@@ -922,6 +964,34 @@ pub fn paint_cursor(
             crate::session_fill_rgba(&core.cfg.cursor_id),
             alpha_scale,
         );
+    }
+}
+
+#[cfg(test)]
+mod workspace_surface_tests {
+    use super::*;
+
+    fn paints(core: &RenderStateCore, space: Option<u64>) -> bool {
+        let mut image = tiny_skia::Pixmap::new(128, 128).unwrap();
+        paint_cursor_on_surface(&mut image, core, 0.0, 0.0, None, 1.0, space);
+        image.data().iter().any(|byte| *byte != 0)
+    }
+
+    #[test]
+    fn workspace_pixels_never_reach_another_surface() {
+        let mut core = RenderStateCore::new(CursorConfig::default());
+        core.pos = (64.0, 64.0);
+        assert!(paints(&core, None));
+        core.workspace_only = true;
+        // Creation and release hide the cursor until it has an owned Space.
+        assert!(!paints(&core, None));
+        assert!(!paints(&core, Some(12)));
+        core.workspace_space_id = Some(12);
+        assert!(paints(&core, Some(12)));
+        assert!(!paints(&core, None));
+        assert!(!paints(&core, Some(13)));
+        core.workspace_space_id = None;
+        assert!(!paints(&core, None));
     }
 }
 

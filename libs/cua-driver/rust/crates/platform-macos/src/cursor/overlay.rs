@@ -184,6 +184,17 @@ pub fn init(cfg: CursorConfig) {
         |event: cua_driver_core::cursor_events::CursorEvent| {
             use cua_driver_core::cursor_events::{CursorEvent, CursorEventPhase};
             let (session, cmd) = match event {
+                CursorEvent::SetWorkspace {
+                    session,
+                    workspace_only,
+                    space_id,
+                } => (
+                    session,
+                    OverlayCommand::SetWorkspace {
+                        workspace_only,
+                        space_id,
+                    },
+                ),
                 CursorEvent::SetSessionLabel { session, label } => {
                     (session, OverlayCommand::SetSessionLabel(label))
                 }
@@ -803,12 +814,20 @@ fn render_loop(
                     let pinned = last_key
                         .as_ref()
                         .and_then(|k| map.cursors.get(k))
-                        .map(|rs| rs.core.pinned_wid)
+                        .map(|rs| {
+                            if rs.core.workspace_only {
+                                None
+                            } else {
+                                rs.core.pinned_wid
+                            }
+                        })
                         .unwrap_or(last_pinned);
                     let raise_unpinned = last_key
                         .as_ref()
                         .and_then(|k| map.cursors.get(k))
-                        .is_some_and(cursor_is_externally_visible)
+                        .is_some_and(|rs| {
+                            !rs.core.workspace_only && cursor_is_externally_visible(rs)
+                        })
                         && pinned.is_none();
                     let next_frame_tick_needed = render_map_needs_frame_tick(map);
                     let next_hover_poll_needed = map
@@ -863,7 +882,7 @@ fn render_loop(
         // change pixels. A final frame is emitted as animations/fades finish so
         // the layer is left in the completed/cleared state before blocking.
         if had_msg || hover_changed || frame_tick_needed || next_frame_tick_needed {
-            let pixmap = {
+            let (pixmap, workspace_frames, scale) = {
                 let guard = RENDER.lock().unwrap();
                 if let Some(map) = guard.as_ref() {
                     // Allocate the pixmap at the screen's PHYSICAL pixel
@@ -877,21 +896,36 @@ fn render_loop(
                     let mut pm = tiny_skia::Pixmap::new(w.max(1), h.max(1))
                         .unwrap_or_else(|| tiny_skia::Pixmap::new(1, 1).unwrap());
                     let backing_scale_f32 = scale as f32;
+                    let mut workspace_frames: HashMap<u64, (tiny_skia::Pixmap, Option<u64>)> =
+                        HashMap::new();
                     for (_k, rs) in &map.cursors {
+                        let canvas = if rs.core.workspace_only {
+                            let Some(space) = rs.core.workspace_space_id else {
+                                continue;
+                            };
+                            let entry = workspace_frames.entry(space).or_insert_with(|| {
+                                (tiny_skia::Pixmap::new(w.max(1), h.max(1)).unwrap(), None)
+                            });
+                            entry.1 = rs.core.pinned_wid;
+                            &mut entry.0
+                        } else {
+                            &mut pm
+                        };
                         let focus = rs.focus_rect.map(|rect| FocusRect {
                             rect,
                             t: rs.focus_rect_t,
                         });
-                        cursor_overlay::paint_cursor(
-                            &mut pm,
+                        cursor_overlay::paint_cursor_on_surface(
+                            canvas,
                             &rs.core,
                             0.0,
                             0.0, // macOS uses screen-local coords (no origin offset)
                             focus,
                             backing_scale_f32,
+                            rs.core.workspace_space_id,
                         );
                     }
-                    pm
+                    (pm, workspace_frames, scale)
                 } else {
                     break;
                 }
@@ -899,6 +933,7 @@ fn render_loop(
 
             // Convert to CGImage and update layer on the main queue.
             dispatch_set_layer_contents(layer_ptr, pixmap);
+            dispatch_workspace_layers(win_ptr, workspace_frames, scale);
         }
 
         frame_tick_needed = next_frame_tick_needed;
@@ -983,6 +1018,180 @@ fn dispatch_set_layer_contents(layer_ptr: usize, pixmap: tiny_skia::Pixmap) {
             main_queue,
             Box::into_raw(payload) as *mut c_void,
             set_contents_cb,
+        );
+    }
+}
+
+static SUSPENDED_WORKSPACE_PANELS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+pub(crate) struct SuspendedWorkspacePanel(u64);
+impl Drop for SuspendedWorkspacePanel {
+    fn drop(&mut self) {
+        SUSPENDED_WORKSPACE_PANELS
+            .lock()
+            .unwrap()
+            .retain(|space| *space != self.0);
+    }
+}
+
+/// Native deletion must not count or migrate our decorative overlay as app content.
+/// Called from the workspace backend, outside the AppKit main thread.
+pub(crate) fn suspend_workspace_panel(space: u64) -> SuspendedWorkspacePanel {
+    SUSPENDED_WORKSPACE_PANELS.lock().unwrap().push(space);
+    let initialized = RENDER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|map| map.win_w > 0.0);
+    if initialized {
+        #[link(name = "dispatch", kind = "dylib")]
+        extern "C" {
+            static _dispatch_main_q: u8;
+            fn dispatch_sync_f(
+                queue: *const c_void,
+                context: *mut c_void,
+                work: unsafe extern "C" fn(*mut c_void),
+            );
+        }
+        unsafe extern "C" fn close(ctx: *mut c_void) {
+            let space = *(ctx as *const u64);
+            WORKSPACE_PANELS.with(|panels| {
+                if let Some((window, _)) = panels.borrow_mut().remove(&space) {
+                    if window != 0 {
+                        let win = window as *mut objc2::runtime::AnyObject;
+                        let _: () = objc2::msg_send![win, close];
+                        let _: () = objc2::msg_send![win, release];
+                    }
+                }
+            });
+        }
+        unsafe {
+            dispatch_sync_f(
+                &raw const _dispatch_main_q as *const c_void,
+                (&space as *const u64).cast_mut().cast(),
+                close,
+            );
+        }
+    }
+    SuspendedWorkspacePanel(space)
+}
+
+// Workspace panels are owned by the AppKit main thread. A separate native
+// window per Space prevents one session from relocating another session's cursor.
+thread_local! {
+    static WORKSPACE_PANELS: std::cell::RefCell<HashMap<u64, (usize, usize)>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+fn dispatch_workspace_layers(
+    template_window: usize,
+    frames: HashMap<u64, (tiny_skia::Pixmap, Option<u64>)>,
+    scale: f64,
+) {
+    let images: HashMap<u64, (usize, Option<u64>)> = frames
+        .into_iter()
+        .filter_map(|(space, (frame, target))| {
+            pixmap_to_cgimage(&frame).map(|image| (space, (image, target)))
+        })
+        .collect();
+    #[link(name = "dispatch", kind = "dylib")]
+    extern "C" {
+        static _dispatch_main_q: u8;
+        fn dispatch_sync_f(
+            queue: *const c_void,
+            context: *mut c_void,
+            work: unsafe extern "C" fn(*mut c_void),
+        );
+        fn CGImageRelease(image: *mut c_void);
+    }
+    unsafe extern "C" fn update(ctx: *mut c_void) {
+        use objc2::{class, msg_send, runtime::AnyObject};
+        let (template, images, scale): (usize, HashMap<u64, (usize, Option<u64>)>, f64) =
+            *Box::from_raw(ctx.cast());
+        WORKSPACE_PANELS.with(|panels| {
+            let mut panels = panels.borrow_mut();
+            panels.retain(|space, (win, _)| {
+                if images.contains_key(space) { return true; }
+                if *win == 0 { return false; }
+                let window = *win as *mut AnyObject;
+                let _: () = msg_send![window, close];
+                let _: () = msg_send![window, release];
+                false
+            });
+            for (space, (image, target)) in images {
+                if SUSPENDED_WORKSPACE_PANELS.lock().unwrap().contains(&space) {
+                    CGImageRelease(image as *mut c_void);
+                    continue;
+                }
+                let entry = panels.entry(space).or_insert_with(|| {
+                    let frame: objc2_foundation::NSRect = msg_send![template as *mut AnyObject, frame];
+                    let allocated: *mut AnyObject = msg_send![class!(NSWindow), alloc];
+                    let win: *mut AnyObject = msg_send![allocated, initWithContentRect: frame
+                        styleMask: 0u64 backing: 2u64 defer: false];
+                    if win.is_null() { return (0, 0); }
+                    let _: () = msg_send![win, setReleasedWhenClosed: false];
+                    let _: () = msg_send![win, setOpaque: false];
+                    let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
+                    let _: () = msg_send![win, setBackgroundColor: clear];
+                    let _: () = msg_send![win, setHasShadow: false];
+                    let _: () = msg_send![win, setIgnoresMouseEvents: true];
+                    let _: () = msg_send![win, setSharingType: 1u64];
+                    let _: () = msg_send![win, setLevel: 0i64];
+                    // Stationary + fullscreen auxiliary, deliberately not all-Spaces.
+                    let _: () = msg_send![win, setCollectionBehavior: ((1u64 << 8) | (1u64 << 4))];
+                    let _: () = msg_send![win, setHidesOnDeactivate: false];
+                    let view: *mut AnyObject = msg_send![win, contentView];
+                    let _: () = msg_send![view, setWantsLayer: true];
+                    let layer: *mut AnyObject = msg_send![view, layer];
+                    let _: () = msg_send![layer, setContentsScale: scale];
+                    let gravity: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: c"topLeft".as_ptr()];
+                    let _: () = msg_send![layer, setContentsGravity: gravity];
+                    // Materialize a WindowServer ID while the panel is still clear.
+                    // Cursor pixels are assigned only after its Space is verified.
+                    let _: () = msg_send![win, orderBack: std::ptr::null::<AnyObject>()];
+                    (win as usize, layer as usize)
+                });
+                let (window, layer) = *entry;
+                if window != 0 {
+                    let win = window as *mut AnyObject;
+                    let number: i64 = msg_send![win, windowNumber];
+                    let placed = u32::try_from(number).ok().filter(|id| *id != 0).is_some_and(|id| {
+                        if crate::spaces::membership(id).ok().as_deref() != Some(&[space]) {
+                            if crate::spaces::move_window(id, space).is_err() { return false; }
+                        }
+                        crate::spaces::membership(id).ok().as_deref() == Some(&[space])
+                    });
+                    if placed {
+                        let _: () = msg_send![layer as *mut AnyObject, setContents: image as *mut AnyObject];
+                        if let Some(target) = target.filter(|target|
+                            u32::try_from(*target).ok().is_some_and(|id|
+                                crate::spaces::membership(id).ok().as_deref() == Some(&[space]))) {
+                            let _: () = msg_send![win, orderWindow: 1i64 relativeTo: target as i64];
+                            if target_is_frontmost_visible_window(target,
+                                crate::apps::frontmost_pid(), &crate::windows::visible_windows()) {
+                                let _: () = msg_send![win, orderFrontRegardless];
+                            }
+                        } else {
+                            let _: () = msg_send![win, orderFrontRegardless];
+                        }
+                        // Verify AppKit ordering did not relocate the panel.
+                        if crate::spaces::membership(number as u32).ok().as_deref() != Some(&[space]) {
+                            let _: () = msg_send![win, orderOut: std::ptr::null::<AnyObject>()];
+                        }
+                    } else {
+                        // A failed or deleted Space must never fall back to the user's desktop.
+                        let _: () = msg_send![win, orderOut: std::ptr::null::<AnyObject>()];
+                    }
+                }
+                CGImageRelease(image as *mut c_void);
+            }
+        });
+    }
+    unsafe {
+        dispatch_sync_f(
+            &raw const _dispatch_main_q as *const c_void,
+            Box::into_raw(Box::new((template_window, images, scale))).cast(),
+            update,
         );
     }
 }

@@ -21,6 +21,11 @@ pub enum CursorEventPhase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CursorEvent {
+    SetWorkspace {
+        session: String,
+        workspace_only: bool,
+        space_id: Option<u64>,
+    },
     SetSessionLabel {
         session: String,
         label: String,
@@ -79,6 +84,18 @@ fn explicit_session(args: &Value) -> Option<String> {
 
 pub fn begin_tool(name: &str, args: &Value) -> Option<(String, CursorAction)> {
     let session = explicit_session(args)?;
+    if let Some(context) = crate::tool::current_dispatch_authorization_context() {
+        let workspace = context
+            .selected_windows()
+            .ok()
+            .flatten()
+            .and_then(|selection| selection.cursor_workspace());
+        emit(CursorEvent::SetWorkspace {
+            session: session.clone(),
+            workspace_only: workspace.is_some(),
+            space_id: workspace.flatten(),
+        });
+    }
     if let Some(label) = args
         .get("_public_session_label")
         .and_then(Value::as_str)
@@ -109,6 +126,14 @@ pub fn begin_tool(name: &str, args: &Value) -> Option<(String, CursorAction)> {
         semantics,
     });
     Some((session, semantics.action))
+}
+
+pub(crate) fn set_workspace(session: &str, space_id: Option<u64>) {
+    emit(CursorEvent::SetWorkspace {
+        session: session.into(),
+        workspace_only: true,
+        space_id,
+    });
 }
 
 pub fn end_tool(active: Option<(String, CursorAction)>) {

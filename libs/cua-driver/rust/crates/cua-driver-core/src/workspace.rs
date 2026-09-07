@@ -208,6 +208,7 @@ impl Workspaces {
                     // Retain a successful native allocation even if the following
                     // state query fails, so explicit release remains possible.
                     selection.set_workspace(Some(space));
+                    crate::cursor_events::set_workspace(session, Some(space));
                     crate::session::retain_workspace(session, true);
                     owned.insert(
                         session.into(),
@@ -226,6 +227,7 @@ impl Workspaces {
             "release_workspace" => {
                 crate::session::retain_workspace(session, false);
                 selection.set_workspace(None);
+                crate::cursor_events::set_workspace(session, None);
                 crate::pip_hook::clear_session(session);
                 let released = owned.remove(session);
                 let mut snapshot =
@@ -374,6 +376,7 @@ impl Workspaces {
                         snapshot.owned = false;
                         crate::session::retain_workspace(session, false);
                         selection.set_workspace(None);
+                        crate::cursor_events::set_workspace(session, None);
                         crate::pip_hook::clear_session(session);
                         owned.remove(session);
                         return Ok(snapshot);

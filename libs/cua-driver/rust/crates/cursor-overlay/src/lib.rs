@@ -23,8 +23,8 @@ pub use bezier::CubicBezier;
 pub use motion::{MotionConfig, Spring};
 pub use path_planner::{PathPlanner, PathState, PlannedPath};
 pub use render_state::{
-    paint_cursor, render_frame, FocusRect, RenderStateCore, SESSION_BADGE_FADE_SECS,
-    SESSION_BADGE_HOLD_SECS,
+    paint_cursor, paint_cursor_on_surface, render_frame, FocusRect, RenderStateCore,
+    SESSION_BADGE_FADE_SECS, SESSION_BADGE_HOLD_SECS,
 };
 pub use session_badge::{
     paint_session_badge, sanitize_session_label, session_badge_extents, session_badge_layout,
@@ -331,6 +331,11 @@ pub enum OverlayMsg {
 /// Commands sent from MCP tool handlers to the overlay's render thread.
 #[derive(Debug, Clone)]
 pub enum OverlayCommand {
+    /// Workspace-only cursors with no Space are hidden while setup/release runs.
+    SetWorkspace {
+        workspace_only: bool,
+        space_id: Option<u64>,
+    },
     /// Animate the cursor to a new screen position.
     MoveTo {
         x: f64,

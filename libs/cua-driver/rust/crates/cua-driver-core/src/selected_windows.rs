@@ -111,6 +111,12 @@ impl SelectedWindows {
         launched && self.validate(target).is_ok()
     }
 
+    pub(crate) fn cursor_workspace(&self) -> Option<Option<u64>> {
+        self.workspace
+            .get()
+            .map(|workspace| *workspace.space.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
     pub(crate) fn set_workspace(&self, space: Option<u64>) {
         if let Some(workspace) = self.workspace.get() {
             *workspace.space.lock().unwrap_or_else(|e| e.into_inner()) = space;
