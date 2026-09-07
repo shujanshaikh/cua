@@ -529,7 +529,7 @@ impl RecordingSession {
             let mut inner = self.inner.lock().unwrap();
             if !inner.enabled
                 || (inner.selected_only
-                    && inner.owner.as_deref() != args.get("_session_id").and_then(Value::as_str))
+                    && inner.owner != crate::tool::current_selected_observation_scope())
             {
                 return None;
             }

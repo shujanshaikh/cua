@@ -264,6 +264,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .exists(),
         "selected recording must not sample the physical cursor"
     );
+    let mut recorded_windows = std::collections::HashSet::new();
+    let mut recorded_frames = 0;
+    for entry in std::fs::read_dir(&recording_dir)? {
+        let path = entry?.path();
+        if !path.is_dir() {
+            continue;
+        }
+        for phase in ["before", "after"] {
+            let state_path = path.join(format!("{phase}_state.json"));
+            if state_path.exists() {
+                let bytes = std::fs::read(&state_path)?;
+                let state: Value = serde_json::from_slice(&bytes)?;
+                let wid = state["window_id"]
+                    .as_u64()
+                    .expect("recorded window identity");
+                assert!(windows
+                    .iter()
+                    .take(2)
+                    .any(|window| window["window_id"].as_u64() == Some(wid)));
+                assert!(!state["tree_markdown"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("fixture-3-initial"));
+                recorded_windows.insert(wid);
+            }
+            if path.join(format!("{phase}.png")).exists() {
+                recorded_frames += 1;
+            }
+        }
+    }
+    assert_eq!(
+        recorded_windows.len(),
+        2,
+        "trajectory must contain actual AX artifacts from both approved windows"
+    );
+    assert!(
+        recorded_frames >= 2,
+        "trajectory must contain actual approved frames"
+    );
+    println!(
+        "recorded_approved_windows={} recorded_frames={recorded_frames}",
+        recorded_windows.len()
+    );
     println!("recording_and_preview_session_scoped=true");
     let oracle_path = format!("{report_path}.state.json");
     if std::path::Path::new(&oracle_path).exists() {
