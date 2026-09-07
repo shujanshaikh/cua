@@ -1,6 +1,81 @@
 # Workspace implementation evidence
 
-This is supporting development evidence, **not desktop E2E certification**. The final tested code SHA is `da857de94c299ef4f48ecf41a211c2f95ee1bb1d`. The following commit updates only this evidence document; it does not change the tested implementation.
+The current tested code SHA is `305bb0ed444821a8ce3359591b91b15be2bcd4d6`. This is native development evidence on the requested personal Mac, **not canonical desktop E2E certification**. The evidence-only delivery commit does not change executable code.
+
+Environment: macOS 26.5, build 25F71, Apple Silicon, SIP enabled, two connected displays. All controlled windows belonged to repository AppKit fixture processes. The SDK examples used the isolated worktree's `target` directory and the existing signed development identity `com.trycua.workspace-probe`. Accessibility and capture permissions were already available. No daily installation, personal window, system setting or TCC database was changed. No process injection, merge, release or upstream PR was performed for this implementation.
+
+## Current native results
+
+| Check | Observed result |
+| --- | --- |
+| Real desktop creation | The full SDK session created ordinary Mission Control Space 4078 on CGDirectDisplayID 1. Its state reported `space_created=true`, `active=false`. Creation briefly showed the existing Mission Control interface through the explicitly enabled trusted option. |
+| Verified automatic movement | Both approved fixture windows moved from Space 3714 to 4078. Exact membership verified; destination remained inactive. Earlier cross-display movement also verified membership without changing active Spaces. |
+| Exact Space enumeration | The minimized-inclusive private query contained both fixture IDs. Attempted deletion while occupied refused. |
+| Inactive AX and capture | Both approved windows returned exact Accessibility data and one screenshot each while the workspace stayed inactive. Both screenshot images changed after text edits; the independent fixture oracle confirmed the new values. |
+| Unapproved sibling | The same-process third fixture window, desktop observation and forged permission IDs were denied. The third fixture's value remained unchanged. |
+| Background input | AX text edits passed on both inactive windows. Frontmost PID and physical cursor positions were unchanged across each tested write. These are bounded observations, not a controlled simultaneous-human-typing certification. |
+| Keyboard ambiguity | Same-process key delivery refused; the implementation also treats unresolved off-Space siblings conservatively. No foreground/global input fallback was used. |
+| Explicit reveal | The session's reveal tool selected its own desktop. The diagnostic explicitly returned to the saved original desktop. Background actions did not invoke reveal. |
+| Membership-based access | Workspace-only access refused before creation and after restoration moved the approved windows outside the owned desktop. Verified movement back restored access without creating new grants. |
+| Minimized/closed windows | Minimization returned no cached screenshot. Closing the second fixture revoked subsequent observation. Final restoration reported the closed-window failure while restoring the surviving minimized window. |
+| Explicit deletion | After restoration, the empty session-created desktop was deleted through Mission Control. A fresh state query reported `space_exists=false`, `owned=false`. Wallpaper exclusion uses Quartz's own desktop-element filter; unknown members block cleanup. |
+| Multiple sessions | Interleaved sibling observations kept their caches separate; cross-session element tokens were denied. Recording control and finalized state were unavailable to the other session. |
+| Recording and preview routing | Ten approved before/after PNG frames and AX artifacts covered both approved windows. No physical-cursor sample file or display video was admitted. The existing `PipBackend` test backend received approved frames and shut down once on deletion/teardown. A recorded fixture PNG was visually inspected. |
+| Revocation | `end_session` and trusted handle close refused later calls. |
+
+The main result markers from the final SDK run are:
+
+```text
+exact_space_query_includes_fixture_windows_and_occupied_deletion_refused=true
+workspace_created_and_two_windows_moved_without_switch=true
+two_approved_discovered=true
+window_0_error=false code=None images=1
+window_1_error=false code=None images=1
+window_2_error=true code=Some("selected_window_denied") images=0
+unapproved_sibling_desktop_and_forged_ids_denied=true
+window_0_physical_cursor_unchanged=true
+window_0_frontmost_unchanged=true
+window_0_fresh_frame_changed_after_ax_write=true
+window_1_physical_cursor_unchanged=true
+window_1_frontmost_unchanged=true
+window_1_fresh_frame_changed_after_ax_write=true
+two_approved_ax_writes_verified_sibling_unchanged=true
+cross_session_tokens_denied_and_cache_isolated=true
+recorded_approved_windows=2 recorded_frames=10
+recording_and_preview_session_scoped=true
+explicit_reveal_verified_and_original_desktop_restored=true
+workspace_restoration_revokes_observation_until_verified_return=true
+independent_fixture_value_oracle_verified=true
+minimized_capture_refused_and_closed_window_revoked=true
+create_error=false code=None
+explicit_empty_desktop_cleanup_verified=true
+session_end_and_handle_close_revoke_access=true
+```
+
+## Checks at the tested SHA
+
+- `cargo test --locked -p cua-driver-core -p cua-driver-contract -p cua-driver-sdk --lib`: 596 core, 32 contract and 52 SDK tests passed.
+- `cargo test --locked -p platform-macos --lib`: 361 passed, 2 ignored. Total passing Rust library tests: 1,041.
+- Native `selected_windows` SDK example with `CUA_WORKSPACE_DISPLAY_ID=1 CUA_WORKSPACE_REVEAL=1 CUA_WORKSPACE_CLEANUP=1`: passed against fresh AppKit fixtures.
+- Canonical contract generation/check and UniFFI regeneration/check: passed; generated SDK bindings remained current.
+- TypeScript typecheck/build and three staged native-loader tests against mock daemons: passed.
+- Separate native builds repeatedly compiled the macOS implementation throughout development. Existing Swift bridge duplicate-symbol linker warnings and the SDK's existing dead-code warning did not fail builds.
+
+Local supporting artifacts are `/private/tmp/cua-workspace-certified-evidence`, `/private/tmp/cua-workspace-certified-sdk.log`, `/private/tmp/cua-workspace-certified-common.log`, `/private/tmp/cua-workspace-certified-macos.log`, `/private/tmp/cua-workspace-certified-node.log`, and `/private/tmp/cua-workspace-certified-bindings.log`. They contain fixture content, not personal-window captures. Follow [setup and executable examples](agent-workspaces.md) to reproduce.
+
+## Limits and outstanding gates
+
+- Native success is verified on this SIP-enabled macOS 26.5 host and the AppKit fixture. Private SkyLight/Dock/AX behavior is version-dependent. Older macOS native movement and Intel macOS execution remain unverified.
+- The first cross-display inactive capture failed in ScreenCaptureKit with an audio/video-start error. Later same-display inactive capture passed. The root cause was not isolated; cross-display capture and automatic frame restoration are not certified.
+- Controlled simultaneous human typing in a separate application, native dialog/sheet/fullscreen transition coverage, hot-plug display changes, sticky windows, real installed-browser target mapping, and visible PiP rendering are outstanding. Existing fail-closed policies remain in place. Do not infer universal background keyboard or browser support from these fixtures.
+- Windows/Linux native workspace adapters and selected-window lifetime binding explicitly report unsupported. Windows/Linux desktop E2E and native compilation were not run from this Mac.
+- The canonical `libs/cua-driver/tests/runners/macos-lume/run-all.sh --standalone-browser` gate was not run. Lume is absent and the user selected host-only testing. The wrapper installs a test driver in its designated VM, so running that installer workflow directly on the personal host would violate the requested isolation. Fixture tests do not replace that gate.
+- A separate host cleanup command for four earlier probe desktops, 4039, 4042, 4048 and 4062, was rejected by automatic approval review because it could not verify ownership from historical IDs. No bypass was attempted. Those earlier desktops remain; fixture applications keep their preset exit timers. The final session-owned desktop 4078 was successfully deleted in the SDK test.
+- Delivery is to `shujanshaikh/cua:main` only. Delivery commits carry `[skip ci]` to prevent the fork's copied release automation from creating a release PR. No PR or release was created.
+
+## Historical evidence before the SIP-enabled implementation
+
+This is supporting development evidence, **not desktop E2E certification**. The previously tested code SHA was `da857de94c299ef4f48ecf41a211c2f95ee1bb1d`. The following commit updates only this evidence document; it does not change the tested implementation.
 
 Environment: macOS 26.5 (25F71), Apple Silicon, SIP enabled, two connected displays. Testing used only repository AppKit fixture processes, signed development examples, temporary mock sockets, and artifacts under `/private/tmp`. Accessibility was already available to the signed development process. No installation replacement, system-setting change, TCC database modification, process injection, personal-window mutation, merge, release, or upstream PR forms part of this delivery.
 
