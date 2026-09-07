@@ -1076,6 +1076,15 @@ pub(crate) fn suspend_workspace_panel(space: u64) -> SuspendedWorkspacePanel {
     SuspendedWorkspacePanel(space)
 }
 
+// A movable workspace panel must never join the user's native fullscreen group.
+fn workspace_panel_behavior() -> objc2_app_kit::NSWindowCollectionBehavior {
+    use objc2_app_kit::NSWindowCollectionBehavior as Behavior;
+    Behavior::Stationary
+        | Behavior::IgnoresCycle
+        | Behavior::FullScreenNone
+        | Behavior::FullScreenDisallowsTiling
+}
+
 // Workspace panels are owned by the AppKit main thread. A separate native
 // window per Space prevents one session from relocating another session's cursor.
 thread_local! {
@@ -1123,6 +1132,16 @@ fn dispatch_workspace_layers(
                     CGImageRelease(image as *mut c_void);
                     continue;
                 }
+                // Also gate already-placed panels: an attached Space may be
+                // fullscreen even when no movement would otherwise be needed.
+                if !crate::spaces::managed_displays().ok()
+                    .is_some_and(|displays| crate::spaces::is_ordinary_space(&displays, space)) {
+                    if let Some((window, _)) = panels.get(&space) {
+                        let _: () = msg_send![*window as *mut AnyObject, orderOut: std::ptr::null::<AnyObject>()];
+                    }
+                    CGImageRelease(image as *mut c_void);
+                    continue;
+                }
                 let entry = panels.entry(space).or_insert_with(|| {
                     let frame: objc2_foundation::NSRect = msg_send![template as *mut AnyObject, frame];
                     let allocated: *mut AnyObject = msg_send![class!(NSWindow), alloc];
@@ -1137,8 +1156,7 @@ fn dispatch_workspace_layers(
                     let _: () = msg_send![win, setIgnoresMouseEvents: true];
                     let _: () = msg_send![win, setSharingType: 1u64];
                     let _: () = msg_send![win, setLevel: 0i64];
-                    // Stationary + fullscreen auxiliary, deliberately not all-Spaces.
-                    let _: () = msg_send![win, setCollectionBehavior: ((1u64 << 8) | (1u64 << 4))];
+                    let _: () = msg_send![win, setCollectionBehavior: workspace_panel_behavior()];
                     let _: () = msg_send![win, setHidesOnDeactivate: false];
                     let view: *mut AnyObject = msg_send![win, contentView];
                     let _: () = msg_send![view, setWantsLayer: true];
@@ -1441,6 +1459,20 @@ fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn workspace_panel_cannot_join_fullscreen_groups_or_follow_active_space() {
+        use objc2_app_kit::NSWindowCollectionBehavior as Behavior;
+        let behavior = workspace_panel_behavior();
+        assert!(behavior.contains(Behavior::FullScreenNone | Behavior::FullScreenDisallowsTiling));
+        assert!(!behavior.intersects(
+            Behavior::FullScreenPrimary
+                | Behavior::FullScreenAuxiliary
+                | Behavior::FullScreenAllowsTiling
+                | Behavior::CanJoinAllSpaces
+                | Behavior::MoveToActiveSpace
+        ));
+    }
 
     #[test]
     fn keyed_render_state_carries_the_session_color_identity() {

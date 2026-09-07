@@ -96,8 +96,12 @@ Accessibility readback can work even when a screenshot is unavailable.
 
 ## Workspace cursors
 
-Each macOS workspace has its own click-through cursor overlay window. The driver
-verifies its Space membership before displaying cursor pixels. Workspace cursors
+Each macOS workspace has its own click-through cursor overlay window. These
+movable panels opt out of fullscreen participation and tiling. Every native move,
+including cursor placement, refuses fullscreen, unknown, or ambiguous source
+and destination Spaces before submitting a WindowServer operation. Panels are
+hidden when their destination is no longer an ordinary desktop. The driver
+verifies Space membership before displaying cursor pixels. Workspace cursors
 are excluded from the global overlay, including while a workspace is being
 created or released. Ending a session removes its panel; deleting an empty Space
 first removes its decorative panel. Other sessions keep their own overlays.

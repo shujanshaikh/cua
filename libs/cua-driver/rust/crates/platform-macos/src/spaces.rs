@@ -178,6 +178,39 @@ pub fn contains_space(displays: &Value, id: u64) -> bool {
     })
 }
 
+/// Native fullscreen Spaces are managed as window groups by macOS. Never send
+/// their members through ordinary desktop movement, including cursor panels.
+pub(crate) fn is_ordinary_space(displays: &Value, id: u64) -> bool {
+    displays.as_array().is_some_and(|displays| {
+        displays.iter().any(|display| {
+            display
+                .get("Spaces")
+                .and_then(Value::as_array)
+                .is_some_and(|spaces| {
+                    spaces.iter().any(|row| {
+                        row.get("ManagedSpaceID").and_then(Value::as_u64) == Some(id)
+                            && row.get("type").and_then(Value::as_u64) == Some(0)
+                    })
+                })
+        })
+    })
+}
+
+fn validate_window_move(displays: &Value, original: &[u64], target: u64) -> Result<(), String> {
+    if !contains_space(displays, target) {
+        return Err("workspace_space_deleted: destination no longer exists".into());
+    }
+    if original.len() != 1 {
+        return Err(
+            "workspace_operation_unsupported: ambiguous or sticky window membership".into(),
+        );
+    }
+    if !is_ordinary_space(displays, target) || !is_ordinary_space(displays, original[0]) {
+        return Err("workspace_operation_unsupported: fullscreen or unavailable Space cannot be a movement source or destination".into());
+    }
+    Ok(())
+}
+
 fn wait_for_membership(
     window_id: u32,
     predicate: impl Fn(&[u64]) -> bool,
@@ -236,17 +269,10 @@ fn bridged_move(window_id: u32, target: u64) -> Result<bool, String> {
 pub fn move_window(window_id: u32, target: u64) -> Result<Vec<u64>, String> {
     type Change = unsafe extern "C" fn(u32, *const c_void, *const c_void);
     let displays = managed_displays()?;
-    if !contains_space(&displays, target) {
-        return Err("workspace_space_deleted: destination no longer exists".into());
-    }
     let old = membership(window_id)?;
+    validate_window_move(&displays, &old, target)?;
     if old == [target] {
         return Ok(old);
-    }
-    if old.len() != 1 {
-        return Err(
-            "workspace_operation_unsupported: ambiguous or sticky window membership".into(),
-        );
     }
     if bridged_move(window_id, target)? {
         if wait_for_membership(window_id, |ids| ids == [target])? == [target] {
@@ -364,25 +390,6 @@ impl cua_driver_core::workspace::WorkspaceBackend for MacosWorkspaces {
             return Err("workspace_window_stale: window owner changed".into());
         }
         let displays = managed_displays()?;
-        let original = membership(wid)?;
-        let ordinary = |id| {
-            displays.as_array().is_some_and(|displays| {
-                displays.iter().any(|display| {
-                    display
-                        .get("Spaces")
-                        .and_then(Value::as_array)
-                        .is_some_and(|spaces| {
-                            spaces.iter().any(|row| {
-                                row.get("ManagedSpaceID").and_then(Value::as_u64) == Some(id)
-                                    && row.get("type").and_then(Value::as_u64) == Some(0)
-                            })
-                        })
-                })
-            })
-        };
-        if !ordinary(space) || !original.iter().all(|&id| ordinary(id)) {
-            return Err("workspace_operation_unsupported: fullscreen or unavailable Space cannot be a movement source or destination".into());
-        }
         let active_before: Vec<_> = displays
             .as_array()
             .unwrap()
@@ -407,5 +414,31 @@ impl cua_driver_core::workspace::WorkspaceBackend for MacosWorkspaces {
     }
     fn reveal(&self, space: u64) -> Result<(), String> {
         mission_control::reveal(space)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn every_native_move_requires_ordinary_source_and_destination() {
+        let displays = json!([
+            {"Spaces":[{"ManagedSpaceID":1,"type":0},{"ManagedSpaceID":2,"type":4}]},
+            {"Spaces":[{"ManagedSpaceID":3,"type":0},{"ManagedSpaceID":4,"type":99},{"ManagedSpaceID":5}]}
+        ]);
+        assert!(validate_window_move(&displays, &[1], 3).is_ok());
+        assert!(validate_window_move(&displays, &[1], 1).is_ok());
+        for (source, target) in [(2, 3), (1, 2), (2, 2), (4, 3), (5, 3), (99, 3), (1, 99)] {
+            assert!(
+                validate_window_move(&displays, &[source], target).is_err(),
+                "{source} -> {target}"
+            );
+        }
+        for source in [vec![], vec![1, 3], vec![1, 2]] {
+            assert!(validate_window_move(&displays, &source, 3).is_err());
+        }
+        assert!(validate_window_move(&Value::Null, &[1], 3).is_err());
     }
 }
