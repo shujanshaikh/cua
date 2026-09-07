@@ -141,6 +141,13 @@ fn process_start(pid: i32) -> Result<(u64, u64), String> {
 }
 
 impl WindowIdentity for Identity {
+    fn validate_process_lifetime(&self) -> Result<(), String> {
+        if process_start(self.target.pid as i32)? != self.started {
+            return Err("selected_window_stale: process lifetime changed".into());
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> Result<(), String> {
         let pid = self.target.pid as i32;
         if process_start(pid)? != self.started

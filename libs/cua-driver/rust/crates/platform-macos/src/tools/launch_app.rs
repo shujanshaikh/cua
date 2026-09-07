@@ -99,6 +99,14 @@ impl LaunchAppTool {
 
     async fn invoke_with_launch_policy(&self, args: Value, trusted_workspace: bool) -> ToolResult {
         use cua_driver_core::tool_args::ArgsExt;
+        let allow_workspace_activation = trusted_workspace
+            && cua_driver_core::tool::current_dispatch_authorization_context().is_some_and(
+                |context| {
+                    context
+                        .capability_manifest()
+                        .is_some_and(|manifest| manifest.workspace_allow_activation())
+                },
+            );
         let bundle_id = args.opt_str("bundle_id");
         let name = args.opt_str("name");
         let mut response_bundle_id = bundle_id.clone();
@@ -221,7 +229,7 @@ impl LaunchAppTool {
         // long enough to perform the request. Use the ordinary targeted
         // post-launch guard to restore the prior foreground app immediately.
         let wildcard_lease = prior_frontmost
-            .filter(|_| !finder_folder_handoff)
+            .filter(|_| !finder_folder_handoff && !allow_workspace_activation)
             .map(|prior| {
                 crate::focus_steal::FocusStealPreventer::begin_suppression(
                     None,
@@ -260,6 +268,7 @@ impl LaunchAppTool {
                         &additional_arguments,
                         &env,
                         creates_new_instance,
+                        allow_workspace_activation,
                     )?
                 }
             } else {
@@ -277,6 +286,7 @@ impl LaunchAppTool {
                         &additional_arguments,
                         &env,
                         creates_new_instance,
+                        allow_workspace_activation,
                     )?
                 }
             };
@@ -308,7 +318,7 @@ impl LaunchAppTool {
         // whether focus-steal prevention actually held.
         let mut self_activation_suppressed: Option<bool> = None;
         if let Ok(Ok((pid, _, _))) = &launch_result {
-            if let Some(prior) = prior_frontmost {
+            if let Some(prior) = prior_frontmost.filter(|_| !allow_workspace_activation) {
                 if *pid != prior {
                     let targeted_lease = crate::focus_steal::FocusStealPreventer::begin_suppression(
                         Some(*pid),

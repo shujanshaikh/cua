@@ -2471,7 +2471,7 @@ async fn workspace_browser_authority_requires_a_live_launched_window() {
         "apps":[{"bundle_id":"com.test.browser","windows":"all"}],
         "browser":{"selected_windows_only":true},
         "desktop":{"selected_windows_only":true,"applications":[1],"windows":[{"pid":1,"window_id":8}]}
-    },"allow":{"tools":["get_browser_state","browser_navigate"]}})
+    },"allow":{"tools":["get_browser_state","browser_navigate","browser_pointer","browser_set_input_files","browser_download"]}})
         .to_string(),
     )
     .unwrap();
@@ -2505,7 +2505,12 @@ async fn workspace_browser_authority_requires_a_live_launched_window() {
     let live = Arc::new(AtomicBool::new(true));
     let mut registry = ToolRegistry::new();
     registry.set_window_selection_backend(Arc::new(Selection(live.clone())));
-    registry.register(Box::new(GetBrowserStateTool::new(engine)));
+    registry.register(Box::new(GetBrowserStateTool::new(engine.clone())));
+    registry.register(Box::new(BrowserPointerTool::new(engine.clone())));
+    registry.register(Box::new(super::tools::BrowserSetInputFilesTool::new(
+        engine.clone(),
+    )));
+    registry.register(Box::new(super::download::BrowserDownloadTool::new(engine)));
     registry.register(Box::new(Apps(crate::tool::ToolDef {
         name: "list_apps".into(),
         description: "Fixture identity".into(),
@@ -2545,8 +2550,30 @@ async fn workspace_browser_authority_requires_a_live_launched_window() {
         .invoke_with_context("get_browser_state", args(9), context.clone())
         .await;
     assert_eq!(sibling.is_error, Some(true));
-    live.store(false, Ordering::SeqCst);
     let bound = bound.structured_content.unwrap();
+    live.store(false, Ordering::SeqCst);
+    for name in [
+        "browser_pointer",
+        "browser_set_input_files",
+        "browser_download",
+    ] {
+        let stale = registry
+            .invoke_with_context(
+                name,
+                json!({
+                    "session":"workspace-browser", "target_id":bound["target_id"],
+                    "tab_id":bound["tabs"][0]["tab_id"], "ref":"p1:1"
+                }),
+                context.clone(),
+            )
+            .await;
+        assert_eq!(stale.is_error, Some(true), "{name}: {stale:?}");
+        let error = serde_json::to_string(&stale).unwrap();
+        assert!(
+            error.contains("selected_window_identity_unavailable"),
+            "{name}: {error}"
+        );
+    }
     let stale = registry
         .invoke_with_context(
             "get_browser_state",

@@ -53,8 +53,16 @@ pub struct LaunchedWorkspaceWindow {
 }
 
 pub trait WorkspaceBackend: Send + Sync {
-    /// Use the normal app launcher, returning only an attested new window.
-    fn launch_app(&self, _args: &Value) -> Result<(LaunchedWorkspaceWindow, Value), String> {
+    /// Attest new windows of an already isolated, driver-launched process.
+    fn discover_windows(
+        &self,
+        _anchor: &LaunchedWorkspaceWindow,
+        _known: &[WindowTarget],
+    ) -> Result<Vec<LaunchedWorkspaceWindow>, String> {
+        Ok(vec![])
+    }
+    /// Use the normal app launcher, returning attested windows from a new process.
+    fn launch_app(&self, _args: &Value) -> Result<(Vec<LaunchedWorkspaceWindow>, Value), String> {
         Err(
             "workspace_operation_unsupported: normal app launch is unavailable on this platform"
                 .into(),
@@ -115,6 +123,58 @@ pub(crate) struct Workspaces {
 }
 
 impl Workspaces {
+    pub(crate) async fn reconcile_after_action(
+        self: &Arc<Self>,
+        args: Value,
+        anchor: LaunchedWorkspaceWindow,
+    ) -> Result<Vec<WindowTarget>, String> {
+        let workspaces = self.clone();
+        crate::tool::spawn_blocking_with_authorization(move || {
+            let context = crate::tool::current_dispatch_authorization_context()
+                .ok_or("workspace_requires_trusted_session")?;
+            if context.is_revoked() || context.is_expired() {
+                return Err("authorization_revoked".into());
+            }
+            let session = args
+                .get("session")
+                .or_else(|| args.get("_session_id"))
+                .and_then(Value::as_str)
+                .ok_or("workspace_session_required")?;
+            let selection = context
+                .selected_windows()?
+                .ok_or("workspace_requires_selected_windows")?;
+            let mut owned = workspaces.owned.lock().unwrap_or_else(|e| e.into_inner());
+            let workspace = owned.get_mut(session).ok_or("workspace_not_found")?;
+            let known = workspace.moved.keys().copied().collect::<Vec<_>>();
+            let windows = workspaces.backend.discover_windows(&anchor, &known)?;
+            if context.is_revoked() || context.is_expired() {
+                return Err("authorization_revoked".into());
+            }
+            let mut admitted = Vec::new();
+            for window in windows {
+                let target = window.target;
+                if target.pid != anchor.target.pid || known.contains(&target) {
+                    return Err("workspace_window_identity_mismatch".into());
+                }
+                selection.admit_launched_window(target, window.identity)?;
+                workspace.moved.insert(target, vec![]);
+                let origin = workspaces.backend.membership(target)?;
+                workspace.moved.insert(target, origin);
+                if workspace.moved[&target].len() != 1 {
+                    return Err(
+                        "workspace_launch_incomplete: new window membership is ambiguous".into(),
+                    );
+                }
+                workspaces.backend.move_window(target, workspace.space)?;
+                selection.validate(target)?;
+                admitted.push(target);
+            }
+            Ok(admitted)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
     pub(crate) async fn launch_app(self: &Arc<Self>, args: Value) -> ToolResult {
         let workspaces = self.clone();
         let outcome = crate::tool::spawn_blocking_with_authorization(move || {
@@ -131,27 +191,58 @@ impl Workspaces {
             if !workspaces.backend.state(workspace.space)?.0 {
                 return Err("workspace_space_deleted: cannot launch into a missing workspace".into());
             }
+            if context.capability_manifest().is_some_and(|m| m.workspace_allow_activation()) {
+                selection.activate_workspace()?;
+            }
             let (launched, mut data) = workspaces.backend.launch_app(&args)?;
             if context.is_revoked() || context.is_expired() {
                 return Err("authorization_revoked: launch completed after session ended; no window access granted".into());
             }
-            let target = launched.target;
-            selection.admit_launched_window(target, launched.identity)?;
-            // Retain the target before moving it so a failed move is recoverable.
-            workspace.moved.insert(target, vec![]);
-            let origin = workspaces.backend.membership(target)?;
-            if origin.len() != 1 {
-                return Err("workspace_launch_incomplete: ambiguous initial membership; query get_workspace_state for recovery".into());
+            if launched.is_empty() {
+                return Err("workspace_launch_no_window: native launcher returned no attested windows".into());
             }
-            workspace.moved.insert(target, origin);
-            workspaces.backend.move_window(target, workspace.space)?;
-            selection.validate(target)?;
-            data["window_id"] = json!(target.window_id);
+            let targets: Vec<_> = launched.iter().map(|window| window.target).collect();
+            // Retain every attested target before moving any of them. A partial
+            // native failure remains inspectable through get_workspace_state.
+            for window in launched {
+                selection.admit_launched_window(window.target, window.identity)?;
+                workspace.moved.insert(window.target, vec![]);
+            }
+            for &target in &targets {
+                let origin = workspaces.backend.membership(target)?;
+                if origin.len() != 1 {
+                    return Err("workspace_launch_incomplete: ambiguous initial membership; query get_workspace_state for recovery".into());
+                }
+                workspace.moved.insert(target, origin);
+                workspaces.backend.move_window(target, workspace.space)?;
+                selection.validate(target)?;
+            }
+            if targets.len() == 1 {
+                data["window_id"] = json!(targets[0].window_id);
+            } else if let Some(object) = data.as_object_mut() {
+                object.remove("window_id");
+            }
             data["workspace_space_id"] = json!(workspace.space);
-            // The native launcher may report other windows; never advertise them as admitted.
-            if let Some(windows) = data.get_mut("windows").and_then(Value::as_array_mut) {
-                windows.retain(|w| w.get("window_id").and_then(Value::as_u64) == Some(target.window_id));
+            if let Some(state) = data.get_mut("launch_state").and_then(Value::as_object_mut) {
+                state.insert("window_ready".into(), json!(true));
             }
+            // Rebuild membership metadata after movement, including windows that
+            // appeared after the normal launcher's initial enumeration.
+            let records = data.get("windows").and_then(Value::as_array);
+            data["windows"] = json!(targets.iter().map(|target| {
+                let mut record = records.and_then(|records| records.iter().find(|w|
+                    w.get("window_id").and_then(Value::as_u64) == Some(target.window_id)
+                )).cloned().unwrap_or_else(|| json!({"window_id":target.window_id}));
+                record["pid"] = json!(target.pid);
+                record["space_ids"] = json!([workspace.space]);
+                // These pre-move observations cannot describe the new placement.
+                if let Some(object) = record.as_object_mut() {
+                    object.remove("is_on_screen");
+                    object.remove("on_current_space");
+                    object.remove("current_space_id");
+                }
+                record
+            }).collect::<Vec<_>>());
             Ok::<_, String>(data)
         }).await;
         match outcome {
@@ -512,9 +603,18 @@ impl Tool for WorkspaceTool {
                     let generic = crate::tool::current_dispatch_authorization_context()
                         .and_then(|c| c.capability_manifest().map(|m| m.workspace_launch_apps()))
                         .unwrap_or(false);
-                    ToolResult::text(if generic {
+                    let active =
+                        crate::tool::current_dispatch_authorization_context().is_some_and(|c| {
+                            c.capability_manifest()
+                                .is_some_and(|m| m.workspace_allow_activation())
+                        });
+                    let mut message = if generic {
                         "Workspace state verified. Use list_apps and launch_app with any installed app name or bundle_id. available_apps contains optional legacy aliases, not an app allowlist."
-                    } else { "Workspace state verified." }).with_structured(structured)
+                    } else { "Workspace state verified." }.to_owned();
+                    if active {
+                        message.push_str(" Workspace activation is allowed: launches and foreground actions may select this desktop. Use exact window IDs and the normal background-to-foreground action ladder.");
+                    }
+                    ToolResult::text(message).with_structured(structured)
                 }
             }
             Err(message) => {
@@ -621,6 +721,11 @@ mod tests {
         launch_count: std::sync::atomic::AtomicUsize,
         launch_fails: std::sync::atomic::AtomicBool,
         move_noop: std::sync::atomic::AtomicBool,
+        multiple_windows: std::sync::atomic::AtomicBool,
+        can_reveal: std::sync::atomic::AtomicBool,
+        active: std::sync::atomic::AtomicBool,
+        discover_child: std::sync::atomic::AtomicBool,
+        close_anchor: std::sync::atomic::AtomicBool,
     }
     impl WindowSelectionBackend for Native {
         fn bind(&self, _: WindowTarget) -> Result<Arc<dyn WindowIdentity>, String> {
@@ -628,7 +733,39 @@ mod tests {
         }
     }
     impl WorkspaceBackend for Native {
-        fn launch_app(&self, args: &Value) -> Result<(LaunchedWorkspaceWindow, Value), String> {
+        fn discover_windows(
+            &self,
+            anchor: &LaunchedWorkspaceWindow,
+            known: &[WindowTarget],
+        ) -> Result<Vec<LaunchedWorkspaceWindow>, String> {
+            anchor.identity.validate_process_lifetime()?;
+            let target = WindowTarget {
+                pid: anchor.target.pid,
+                window_id: 52,
+            };
+            if self
+                .discover_child
+                .load(std::sync::atomic::Ordering::SeqCst)
+                && !known.contains(&target)
+            {
+                if self.close_anchor.load(std::sync::atomic::Ordering::SeqCst) {
+                    self.membership
+                        .lock()
+                        .unwrap()
+                        .insert(anchor.target, vec![]);
+                }
+                Ok(vec![LaunchedWorkspaceWindow {
+                    target,
+                    identity: Arc::new(Live),
+                }])
+            } else {
+                Ok(vec![])
+            }
+        }
+        fn launch_app(
+            &self,
+            args: &Value,
+        ) -> Result<(Vec<LaunchedWorkspaceWindow>, Value), String> {
             assert_eq!(args["name"], "Zed");
             assert_eq!(args["urls"], json!(["/project"]));
             let window = self.launch(&WorkspaceApplication {
@@ -636,8 +773,21 @@ mod tests {
                 arguments: vec![],
                 urls: vec![],
             })?;
+            let mut windows = vec![window];
+            if self
+                .multiple_windows
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                windows.push(LaunchedWorkspaceWindow {
+                    target: WindowTarget {
+                        pid: 50,
+                        window_id: 52,
+                    },
+                    identity: Arc::new(Live),
+                });
+            }
             Ok((
-                window,
+                windows,
                 json!({"pid":50,"name":"Zed","bundle_id":"dev.zed.Zed","windows":[{"window_id":51},{"window_id":999}]}),
             ))
         }
@@ -667,7 +817,7 @@ mod tests {
             }
             Ok((
                 space == 100 && !self.deleted.load(std::sync::atomic::Ordering::SeqCst),
-                false,
+                self.active.load(std::sync::atomic::Ordering::SeqCst),
             ))
         }
         fn membership(&self, target: WindowTarget) -> Result<Vec<u64>, String> {
@@ -687,7 +837,12 @@ mod tests {
             Ok(())
         }
         fn reveal(&self, _: u64) -> Result<(), String> {
-            Err("workspace_operation_unsupported: native reveal refused".into())
+            if self.can_reveal.load(std::sync::atomic::Ordering::SeqCst) {
+                self.active.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            } else {
+                Err("workspace_operation_unsupported: native reveal refused".into())
+            }
         }
     }
 
@@ -696,10 +851,19 @@ mod tests {
         session: &str,
         windows: &[WindowTarget],
     ) -> Arc<EffectiveAuthorizationContext> {
+        context_with_activation(registry, session, windows, false)
+    }
+
+    fn context_with_activation(
+        registry: &SessionAuthorizationRegistry,
+        session: &str,
+        windows: &[WindowTarget],
+        allow_activation: bool,
+    ) -> Arc<EffectiveAuthorizationContext> {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), serde_json::to_vec(&json!({
-            "version":3,"resources":{"apps":[{"bundle_id":"com.test.app","launch":true}],"desktop":{"workspace_launch_apps":true,"workspace_applications":{"notes":{"bundle_id":"com.test.app"}},"selected_windows_only":true,"workspace_only":true,"windows":windows,"workspace_space_id":100}},
-            "allow":{"tools":["get_window_state","get_browser_state","click","type_text","launch_app","list_apps","launch_workspace_app","create_workspace","get_workspace_state","move_window_to_workspace","reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace","end_session","list_windows"]}
+            "version":3,"resources":{"apps":[{"bundle_id":"com.test.app","launch":true}],"desktop":{"workspace_launch_apps":true,"workspace_applications":{"notes":{"bundle_id":"com.test.app"}},"selected_windows_only":true,"workspace_only":true,"workspace_allow_activation":allow_activation,"windows":windows,"workspace_space_id":100}},
+            "allow":{"tools":["get_window_state","verify_state","get_browser_state","click","type_text","set_window_frame","launch_app","list_apps","launch_workspace_app","create_workspace","get_workspace_state","move_window_to_workspace","reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace","end_session","list_windows"]}
         })).unwrap()).unwrap();
         let manifest = Arc::new(crate::session_manifest::load_manifest(file.path()).unwrap());
         let (host, connection) = registry.trusted_in_process_binding();
@@ -876,7 +1040,22 @@ mod tests {
         }
         async fn invoke(&self, _: Value) -> ToolResult {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            ToolResult::text("observed or interacted with exact window")
+            let result = ToolResult::text("observed or interacted with exact window");
+            if self.def.name == "set_window_frame" {
+                use crate::action_record::*;
+                result.with_action_record(
+                    ActionExecutionRecord::builder(
+                        ActionEffect::Unverifiable,
+                        ActionTransport::MacosAxWindowFrame,
+                        RequestedDelivery::NotApplicable,
+                    )
+                    .actual_delivery(ActualDelivery::NotApplicable)
+                    .build()
+                    .unwrap(),
+                )
+            } else {
+                result
+            }
         }
     }
 
@@ -904,6 +1083,8 @@ mod tests {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         for name in [
             "get_window_state",
+            "verify_state",
+            "set_window_frame",
             "get_browser_state",
             "click",
             "type_text",
@@ -944,6 +1125,8 @@ mod tests {
             .is_err());
         for name in [
             "get_window_state",
+            "verify_state",
+            "set_window_frame",
             "get_browser_state",
             "click",
             "type_text",
@@ -1024,6 +1207,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn active_workspace_reveals_before_launch_and_foreground_input() {
+        check_active_workspace_handoff(false).await;
+    }
+
+    #[tokio::test]
+    async fn closed_dialog_preserves_new_window_evidence_after_stale_refusal() {
+        check_active_workspace_handoff(true).await;
+    }
+
+    async fn check_active_workspace_handoff(closes_anchor: bool) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let native = Arc::new(Native::default());
+        native.can_reveal.store(true, SeqCst);
+        let auth = SessionAuthorizationRegistry::with_ceiling(
+            SessionModeCeiling::for_trusted_sessions(
+                [PermissionMode::Standard],
+                false,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
+        let context = context_with_activation(&auth, "active-work", &[], true);
+        let mut tools = ToolRegistry::new();
+        tools.set_window_selection_backend(native.clone());
+        tools.set_workspace_backend(native.clone());
+        tools.register(Box::new(NormalLaunch));
+        tools.register_session_tools();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        tools.register(Box::new(WorkspaceInteraction {
+            def: ToolDef {
+                name: "click".into(),
+                description: "fixture".into(),
+                input_schema: json!({"type":"object"}),
+                read_only: false,
+                destructive: false,
+                idempotent: false,
+                open_world: false,
+            },
+            calls: calls.clone(),
+        }));
+        tools.bind_selected_windows(&context).unwrap();
+        for (name, args) in [
+            ("create_workspace", json!({"session":"active-work"})),
+            (
+                "launch_app",
+                json!({"session":"active-work","name":"Zed","urls":["/project"]}),
+            ),
+        ] {
+            let result = tools.invoke_with_context(name, args, context.clone()).await;
+            assert_ne!(result.is_error, Some(true), "{result:?}");
+        }
+        assert!(native.active.load(SeqCst));
+        native.active.store(false, SeqCst);
+        native.discover_child.store(true, SeqCst);
+        native.close_anchor.store(closes_anchor, SeqCst);
+        let args =
+            json!({"session":"active-work","pid":50,"window_id":51,"delivery_mode":"foreground"});
+        let result = tools
+            .invoke_with_context("click", args.clone(), context.clone())
+            .await;
+        assert_eq!(result.is_error == Some(true), closes_anchor, "{result:?}");
+        if closes_anchor {
+            native.membership.lock().unwrap().insert(
+                WindowTarget {
+                    pid: 50,
+                    window_id: 51,
+                },
+                vec![100],
+            );
+        }
+        assert!(native.active.load(SeqCst));
+        assert_eq!(calls.load(SeqCst), 1);
+        assert!(context
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(WindowTarget {
+                pid: 50,
+                window_id: 52
+            })
+            .is_ok());
+        assert!(serde_json::to_string(&result)
+            .unwrap()
+            .contains("New windows admitted"));
+        native.active.store(false, SeqCst);
+        native.can_reveal.store(false, SeqCst);
+        let failed = tools
+            .invoke_with_context("click", args.clone(), context.clone())
+            .await;
+        assert_eq!(failed.is_error, Some(true));
+        assert_eq!(calls.load(SeqCst), 1);
+        native.can_reveal.store(true, SeqCst);
+        native.membership.lock().unwrap().insert(
+            WindowTarget {
+                pid: 50,
+                window_id: 51,
+            },
+            vec![1],
+        );
+        let moved = tools.invoke_with_context("click", args, context).await;
+        assert_eq!(moved.is_error, Some(true));
+        assert!(
+            !native.active.load(SeqCst),
+            "unauthorized target must not switch desktop"
+        );
+        assert_eq!(calls.load(SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn ordinary_launch_routes_to_workspace_and_checks_membership() {
         let native = Arc::new(Native::default());
         let auth = SessionAuthorizationRegistry::with_ceiling(
@@ -1063,12 +1356,18 @@ mod tests {
             )
             .await;
         assert_ne!(created.is_error, Some(true), "{created:?}");
+        native
+            .multiple_windows
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let result = tools
             .invoke_with_context("launch_app", args.clone(), selected.clone())
             .await;
         assert_ne!(result.is_error, Some(true), "{result:?}");
         let data = result.structured_content.unwrap();
-        assert_eq!(data["windows"], json!([{"window_id":51}]));
+        assert_eq!(
+            data["windows"],
+            json!([{"window_id":51,"pid":50,"space_ids":[100]},{"window_id":52,"pid":50,"space_ids":[100]}])
+        );
         assert_eq!(data["workspace_space_id"], 100);
         let target = WindowTarget {
             pid: 50,
@@ -1086,14 +1385,78 @@ mod tests {
             .unwrap()
             .validate(target)
             .is_err());
+        assert!(data.get("window_id").is_none());
+        assert_eq!(
+            data["windows"],
+            json!([
+                {"pid":50,"window_id":51,"space_ids":[100]},
+                {"pid":50,"window_id":52,"space_ids":[100]}
+            ])
+        );
+        let second = WindowTarget {
+            pid: 50,
+            window_id: 52,
+        };
+        assert!(selected
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(second)
+            .is_ok());
+        assert!(other
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(second)
+            .is_err());
         native.membership.lock().unwrap().insert(target, vec![1]);
+        native.membership.lock().unwrap().insert(second, vec![1]);
         native
             .move_noop
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        let partial = context(&auth, "partial", &[]);
+        let mut tools = ToolRegistry::new();
+        tools.set_window_selection_backend(native.clone());
+        tools.set_workspace_backend(native.clone());
+        tools.register(Box::new(NormalLaunch));
+        tools.register_session_tools();
+        tools.bind_selected_windows(&partial).unwrap();
+        let created = tools
+            .invoke_with_context(
+                "create_workspace",
+                json!({"session":"partial"}),
+                partial.clone(),
+            )
+            .await;
+        assert_ne!(created.is_error, Some(true), "{created:?}");
         let failed = tools
-            .invoke_with_context("launch_app", args, selected)
+            .invoke_with_context(
+                "launch_app",
+                json!({"session":"partial","name":"Zed","urls":["/project"]}),
+                partial.clone(),
+            )
             .await;
         assert_eq!(failed.is_error, Some(true));
+        let state = tools
+            .invoke_with_context(
+                "get_workspace_state",
+                json!({"session":"partial"}),
+                partial.clone(),
+            )
+            .await;
+        assert_eq!(
+            state.structured_content.unwrap()["windows"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(selected
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(second)
+            .is_err());
     }
 
     #[tokio::test]

@@ -33,17 +33,17 @@ fn manifest(root: &Path) -> Value {
     json!({"version":3,"resources":{
         "browser":{"selected_windows_only":true},
         "desktop":{"selected_windows_only":true,"workspace_only":true,
-            "workspace_allow_mission_control":true,"windows":[],
+            "workspace_allow_mission_control":true,"workspace_allow_activation":true,"windows":[],
             "workspace_launch_apps":true},
         "files":{"read":[{"dir":root,"recursive":true}],"write":[{"dir":root,"recursive":true}]}
     },"allow":{"tools":[
         "start_session","get_session","get_session_state","list_sessions","end_session",
         "create_workspace","get_workspace_state","launch_workspace_app","move_window_to_workspace",
         "reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace",
-        "get_browser_state","browser_navigate","browser_click","browser_type","browser_dialog",
+        "get_browser_state","browser_navigate","browser_click","browser_type","browser_dialog","browser_pointer","browser_set_input_files","browser_download",
         "launch_app","list_apps","list_windows","get_window_state","verify_state","click","double_click",
-        "right_click","scroll","drag","set_value","type_text","press_key","hotkey",
-        "invoke_menu","start_recording","get_recording_state","stop_recording"
+        "right_click","scroll","drag","set_value","set_window_frame","type_text","press_key","hotkey",
+        "invoke_menu","bring_to_front","start_recording","get_recording_state","stop_recording"
     ]}})
 }
 

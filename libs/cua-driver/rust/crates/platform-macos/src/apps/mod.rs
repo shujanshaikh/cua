@@ -141,6 +141,7 @@ pub fn launch_with_urls_by_bundle(
     additional_args: &[String],
     env: &std::collections::HashMap<String, String>,
     creates_new_instance: bool,
+    activates: bool,
 ) -> anyhow::Result<i32> {
     if additional_args.is_empty()
         && env.is_empty()
@@ -162,6 +163,7 @@ pub fn launch_with_urls_by_bundle(
         arguments: additional_args.to_vec(),
         environment: env.clone(),
         creates_new_instance,
+        activates,
         apple_event_bundle_id: if urls.is_empty() {
             Some(bundle_id.to_owned())
         } else {
@@ -187,6 +189,7 @@ pub fn launch_with_urls_by_name(
     additional_args: &[String],
     env: &std::collections::HashMap<String, String>,
     creates_new_instance: bool,
+    activates: bool,
 ) -> anyhow::Result<i32> {
     let located = locate_by_name(name)
         .ok_or_else(|| anyhow::anyhow!("Could not locate app with name '{name}'"))?;
@@ -206,6 +209,7 @@ pub fn launch_with_urls_by_name(
         arguments: additional_args.to_vec(),
         environment: env.clone(),
         creates_new_instance,
+        activates,
         apple_event_bundle_id: if urls.is_empty() { bid } else { None },
     };
     let running = if urls.is_empty() {

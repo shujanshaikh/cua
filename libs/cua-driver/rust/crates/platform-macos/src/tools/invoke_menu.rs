@@ -315,7 +315,15 @@ impl Tool for InvokeMenuTool {
             return refusal("invoke_menu: window_id does not belong to pid".into());
         }
 
-        let outcome = tokio::task::spawn_blocking(move || {
+        let outcome = cua_driver_core::tool::spawn_blocking_with_authorization(move || {
+            if let Some(context) = cua_driver_core::tool::current_dispatch_authorization_context() {
+                if let Some(selection) = context.selected_windows()? {
+                    selection.validate(cua_driver_core::selected_windows::WindowTarget {
+                        pid: i64::from(pid),
+                        window_id: u64::from(window_id),
+                    })?;
+                }
+            }
             let prior_frontmost = crate::apps::frontmost_pid();
             let prior_frontmost_window =
                 prior_frontmost.and_then(crate::ax::bindings::focused_window_id_of_pid);

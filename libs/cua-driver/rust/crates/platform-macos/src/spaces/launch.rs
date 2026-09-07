@@ -16,11 +16,16 @@ pub(super) fn launch(recipe: &WorkspaceApplication) -> Result<LaunchedWorkspaceW
         }),
         &recipe.bundle_id,
         &recipe.urls,
+        true,
     )
-    .map(|(window, _)| window)
+    .and_then(|(mut windows, _)| {
+        if windows.len() == 1 { Ok(windows.remove(0)) } else {
+            Err("workspace_launch_ambiguous: legacy recipe requires one exact window; use launch_app for multi-window apps".into())
+        }
+    })
 }
 
-pub(super) fn launch_app(args: &Value) -> Result<(LaunchedWorkspaceWindow, Value), String> {
+pub(super) fn launch_app(args: &Value) -> Result<(Vec<LaunchedWorkspaceWindow>, Value), String> {
     let bundle = if let Some(bundle) = args.get("bundle_id").and_then(Value::as_str) {
         bundle.to_owned()
     } else {
@@ -66,14 +71,21 @@ pub(super) fn launch_app(args: &Value) -> Result<(LaunchedWorkspaceWindow, Value
     args["additional_arguments"] = json!(arguments);
     let urls: Vec<String> = serde_json::from_value(args.get("urls").cloned().unwrap_or(json!([])))
         .map_err(|_| "workspace_launch_failed: urls must be strings")?;
-    launch_verified(args, &bundle, &urls)
+    launch_verified(args, &bundle, &urls, false)
 }
 
 fn launch_verified(
     args: Value,
     bundle_id: &str,
     urls: &[String],
-) -> Result<(LaunchedWorkspaceWindow, Value), String> {
+    exact_document: bool,
+) -> Result<(Vec<LaunchedWorkspaceWindow>, Value), String> {
+    let allow_activation = cua_driver_core::tool::current_dispatch_authorization_context()
+        .is_some_and(|context| {
+            context
+                .capability_manifest()
+                .is_some_and(|manifest| manifest.workspace_allow_activation())
+        });
     let focus_before = LaunchFocus::capture()?;
     // Read kernel process identities, avoiding NSWorkspace's cached app list.
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
@@ -125,7 +137,7 @@ fn launch_verified(
     let suppressed = data
         .get("self_activation_suppressed")
         .and_then(Value::as_bool);
-    let after_launch = check_launch_focus(pid, suppressed, &focus_before, "after_launch")?;
+
     // NSWorkspace's runningApplications list can remain cached in a direct
     // MCP process. Resolve this exact PID rather than polling that list.
     if crate::apps::bundle_id_for_pid(pid).as_deref() != Some(bundle_id) {
@@ -134,6 +146,16 @@ fn launch_verified(
                 .into(),
         );
     }
+    if allow_activation && !crate::apps::activate_pid(pid) {
+        return Err(format!("workspace_launch_activation_failed: created pid {pid} could not be activated; no windows admitted"));
+    }
+    let after_launch = check_launch_focus(
+        pid,
+        suppressed,
+        &focus_before,
+        "after_launch",
+        allow_activation,
+    )?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     let windows = loop {
         let windows: Vec<_> = crate::windows::all_windows()
@@ -145,7 +167,13 @@ fn launch_verified(
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     };
-    let after_windows = check_launch_focus(pid, suppressed, &focus_before, "after_windows")?;
+    let after_windows = check_launch_focus(
+        pid,
+        suppressed,
+        &focus_before,
+        "after_windows",
+        allow_activation,
+    )?;
     let mut data = data.clone();
     data["workspace_launch_focus"] = json!({
         "before": focus_before,
@@ -153,12 +181,12 @@ fn launch_verified(
         "after_windows": after_windows,
     });
     if windows.is_empty() {
-        return Err(format!("workspace_launch_no_window: created pid {pid} did not expose a background window; the app may require activation, which this workspace will not perform"));
+        return Err(format!("workspace_launch_no_window: created pid {pid} did not expose a WindowServer window within 3000 ms; no window access granted. The process is left untouched. This result does not distinguish delayed startup from an app that requires activation"));
     }
     // Document apps may also create an untitled window or an open panel.
     // Bind only the exact document the trusted recipe requested; those other
     // windows remain outside the selection, including keyboard delivery.
-    if urls.len() == 1 && std::path::Path::new(&urls[0]).is_file() {
+    if exact_document && urls.len() == 1 && std::path::Path::new(&urls[0]).is_file() {
         let mut matches = Vec::new();
         for window in &windows {
             let target = WindowTarget {
@@ -175,19 +203,67 @@ fn launch_verified(
             }
         }
         if matches.len() == 1 {
-            return Ok((matches.remove(0), data));
+            return Ok((matches, data));
         }
         return Err(format!("workspace_launch_ambiguous: created pid {pid} has no unique exact document window; no windows approved"));
     }
-    if windows.len() != 1 {
-        return Err(format!("workspace_launch_ambiguous: created pid {pid} has {} top-level windows; no windows approved", windows.len()));
-    }
-    let target = WindowTarget {
-        pid: i64::from(pid),
-        window_id: u64::from(windows[0].window_id),
+    // Bind every startup window before returning any grants. A verified fresh
+    // process may legitimately own a document, open panel, or restored windows.
+    // AX windows can become available after WindowServer publishes startup
+    // placeholders. Retry discovery rather than failing on the first CG entry.
+    let bind_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let (windows, launched, unadmitted) = loop {
+        let windows: Vec<_> = crate::windows::all_windows()
+            .into_iter()
+            .filter(|window| window.pid == pid)
+            .collect();
+        let mut launched = Vec::new();
+        let mut unadmitted = Vec::new();
+        for window in &windows {
+            let target = WindowTarget {
+                pid: i64::from(pid),
+                window_id: u64::from(window.window_id),
+            };
+            match crate::selected_windows::MacosWindowSelection.bind(target) {
+            Ok(identity) => launched.push(LaunchedWorkspaceWindow { target, identity }),
+            Err(reason)
+                if reason
+                    == "selected_window_identity_unavailable: exact AX window is unresolved" =>
+            {
+                // WindowServer also retains entries with no live AX window.
+                // They must not invalidate separately attested siblings.
+                unadmitted.push(json!({"pid":pid,"window_id":target.window_id,"reason":reason}));
+            }
+            Err(reason) => {
+                return Err(format!(
+                    "{reason}; created pid {pid}, window_id {}; no windows admitted",
+                    target.window_id
+                ))
+            }
+        }
+        }
+        if !launched.is_empty() || std::time::Instant::now() >= bind_deadline {
+            break (windows, launched, unadmitted);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     };
-    let identity = crate::selected_windows::MacosWindowSelection.bind(target)?;
-    Ok((LaunchedWorkspaceWindow { target, identity }, data))
+    let final_focus = check_launch_focus(
+        pid,
+        suppressed,
+        &focus_before,
+        "after_binding",
+        allow_activation,
+    )?;
+    data["workspace_launch_focus"]["after_binding"] = json!(final_focus);
+    if launched.is_empty() {
+        return Err(format!("workspace_launch_no_attested_window: created pid {pid}; no windows admitted; unresolved={unadmitted:?}"));
+    }
+    data["unadmitted_windows"] = json!(unadmitted);
+    data["windows"] = json!(windows
+        .iter()
+        .map(crate::tools::list_windows::window_record_json)
+        .collect::<Vec<_>>());
+    Ok((launched, data))
 }
 
 /// Desktop snapshots are diagnostics, not ownership evidence. A user can change
@@ -224,6 +300,7 @@ fn check_launch_focus(
     suppressed: Option<bool>,
     before: &LaunchFocus,
     stage: &str,
+    allow_activation: bool,
 ) -> Result<LaunchFocus, String> {
     let after = LaunchFocus::capture().map_err(|error| {
         format!("workspace_launch_background_failed: {error}; created pid {pid} left untouched and unauthorized; stage={stage}")
@@ -235,7 +312,7 @@ fn check_launch_focus(
         "after": after,
         "self_activation_suppressed": suppressed,
     });
-    if let Some(reason) = after.refusal(pid, suppressed) {
+    if let Some(reason) = after.refusal(pid, suppressed).filter(|_| !allow_activation) {
         tracing::warn!(%diagnostics, reason, "Workspace launch admission refused");
         return Err(format!("workspace_launch_background_failed: {reason}; created pid {pid} left untouched and unauthorized; diagnostics={diagnostics}"));
     }

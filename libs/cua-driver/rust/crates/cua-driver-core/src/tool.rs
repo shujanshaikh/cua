@@ -719,7 +719,12 @@ impl ToolRegistry {
         {
             let backend = self.workspace_backend.clone().ok_or("workspace_operation_unsupported: workspace-only access is unavailable on this platform")?;
             if let Some(selection) = context.selected_windows()? {
-                selection.restrict_to_workspace(backend);
+                selection.restrict_to_workspace(
+                    backend,
+                    context
+                        .capability_manifest()
+                        .is_some_and(|m| m.workspace_allow_activation()),
+                );
             }
         }
         Ok(())
@@ -1722,6 +1727,34 @@ impl ToolRegistry {
                 return protected_refusal("selected_window_stale", &error);
             }
         }
+        if selection.is_some_and(|selection| selection.allows_activation())
+            && (matches!(resolved_name, "invoke_menu" | "bring_to_front")
+                || args.get("delivery_mode").and_then(Value::as_str) == Some("foreground"))
+        {
+            let activated = spawn_blocking_with_authorization(|| {
+                let context = current_dispatch_authorization_context()
+                    .ok_or("workspace_requires_trusted_session")?;
+                context
+                    .selected_windows()?
+                    .ok_or("workspace_requires_selected_windows")?
+                    .activate_workspace()
+            })
+            .await;
+            if let Err(error) = activated.map_err(|e| e.to_string()).and_then(|r| r) {
+                return protected_refusal("workspace_activation_failed", &error);
+            }
+        }
+        let workspace_anchor = selection
+            .filter(|selection| selection.allows_activation() && !tool.def().read_only)
+            .and_then(|selection| {
+                let target = selected_browser_target
+                    .or_else(|| crate::selected_windows::SelectedWindows::target(&args).ok())?;
+                if !selection.is_live_launched_window(target) {
+                    return None;
+                }
+                let identity = selection.native_identity(target).ok()?;
+                Some(crate::workspace::LaunchedWorkspaceWindow { target, identity })
+            });
         let mut result = if resolved_name == "launch_app"
             && context
                 .capability_manifest()
@@ -1737,6 +1770,21 @@ impl ToolRegistry {
         } else {
             tool.invoke(args.clone()).await
         };
+        // Preserve discovery evidence across post-action lifetime checks and the
+        // normal action-result projection. A dialog may close after its action.
+        let mut workspace_discovery = None;
+        if result.is_error != Some(true) {
+            if let (Some(workspaces), Some(anchor)) = (&self.workspaces, workspace_anchor) {
+                workspace_discovery = match workspaces.reconcile_after_action(args.clone(), anchor).await {
+                    Ok(windows) if !windows.is_empty() => Some(format!(
+                        "New windows admitted after action dispatch: {}. The original window may have closed; refresh get_workspace_state and get_window_state before continuing. Do not repeat the action solely because the original target is stale.",
+                        serde_json::to_string(&windows).unwrap()
+                    )),
+                    Ok(_) => None,
+                    Err(error) => Some(format!("Workspace window discovery was incomplete: {error}. Query get_workspace_state before using any new window.")),
+                };
+            }
+        }
         if context.is_revoked() || context.is_expired() {
             result = protected_refusal(
                 "authorization_revoked",
@@ -1886,6 +1934,14 @@ impl ToolRegistry {
                         "detail": error,
                     }));
                 }
+            }
+        }
+        if !context.is_revoked() && !context.is_expired() {
+            if let Some(text) = workspace_discovery {
+                result.content.push(Content::Text {
+                    text,
+                    annotations: None,
+                });
             }
         }
         // Use the original name for downstream code paths below so the

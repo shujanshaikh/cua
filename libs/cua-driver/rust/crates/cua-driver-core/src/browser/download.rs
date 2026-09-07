@@ -275,6 +275,19 @@ impl Tool for BrowserDownloadTool {
         &self.def
     }
 
+    async fn protected_resource_scope(
+        &self,
+        adapter_id: &str,
+        args: &Value,
+    ) -> Result<Option<Value>, String> {
+        if adapter_id == "browser_bound_input" {
+            super::tools::browser_protected_resource_scope(&self.engine, args, "browser_download")
+                .await
+        } else {
+            Ok(None)
+        }
+    }
+
     async fn invoke(&self, args: Value) -> ToolResult {
         let (session, target_id, tab_id, ext_ref, destination_raw) = match (
             explicit_session(&args),

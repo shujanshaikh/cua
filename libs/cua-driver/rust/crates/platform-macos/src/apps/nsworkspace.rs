@@ -10,7 +10,7 @@
 //!
 //! Both share an `OpenConfig` builder that mirrors the subset of
 //! `NSWorkspaceOpenConfiguration` properties Swift sets:
-//!   * `activates = false`         (background launch — no focus steal)
+//!   * `activates = …`             (background unless explicitly authorized)
 //!   * `addsToRecentItems = false` (don't pollute the Apple menu)
 //!   * `createsNewApplicationInstance = …`
 //!   * `arguments = …` / `environment = …`
@@ -51,11 +51,13 @@ const K_ANY_TRANSACTION_ID: i32 = 0; // kAnyTransactionID
 /// Caller-friendly launch options. Mirrors the subset of
 /// `NSWorkspaceOpenConfiguration` properties Swift `AppLauncher` sets.
 ///
-/// Always sends `activates = false` + `addsToRecentItems = false`. The
+/// Defaults to background launch and always sets `addsToRecentItems = false`. The
 /// optional fields are applied only when present so the builder doesn't
 /// override an inherited default.
 #[derive(Default, Debug, Clone)]
 pub struct OpenConfig {
+    /// Explicit foreground launch, authorized by the workspace host policy.
+    pub activates: bool,
     /// `--args` for the launched process. Passed as argv entries (no shell
     /// expansion).
     pub arguments: Vec<String>,
@@ -188,12 +190,11 @@ pub fn open_urls_with_application(
 
 /// Build an `NSWorkspaceOpenConfiguration` from `cfg`.
 ///
-/// Always sets `activates = false` and `addsToRecentItems = false` to match
-/// Swift's background-launch invariant.
+/// Preserves background launch by default; workspace policy can request activation.
 fn build_configuration(cfg: &OpenConfig) -> Retained<NSWorkspaceOpenConfiguration> {
     let config = unsafe { NSWorkspaceOpenConfiguration::configuration() };
     unsafe {
-        config.setActivates(false);
+        config.setActivates(cfg.activates);
         config.setAddsToRecentItems(false);
         config.setCreatesNewApplicationInstance(cfg.creates_new_instance);
 
@@ -464,6 +465,18 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn configuration_activates_only_when_explicitly_requested() {
+        for activates in [false, true] {
+            let configuration = super::build_configuration(&super::OpenConfig {
+                activates,
+                ..Default::default()
+            });
+            assert_eq!(unsafe { configuration.activates() }, activates);
+            assert!(!unsafe { configuration.addsToRecentItems() });
+        }
+    }
 
     #[test]
     fn missing_callback_reconciles_registered_process() {

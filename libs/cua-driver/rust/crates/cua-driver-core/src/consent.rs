@@ -380,6 +380,7 @@ impl ProtectedResourceGrants {
                         | ("desktop_input", Some("window_input"))
                 )
                 && (adapter_id != "desktop_input"
+                    || manifest.workspace_allow_activation()
                     || resource
                         .get("delivery_mode_ceiling")
                         .and_then(Value::as_str)

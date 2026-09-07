@@ -49,6 +49,7 @@ pub struct SessionManifest {
     workspace_space_id: Option<u64>,
     workspace_allow_mission_control: bool,
     workspace_only: bool,
+    workspace_allow_activation: bool,
     workspace_launch_apps: bool,
     workspace_display_id: Option<u32>,
     workspace_applications: HashMap<String, crate::workspace::WorkspaceApplication>,
@@ -108,6 +109,10 @@ impl SessionManifest {
 
     pub fn workspace_launch_apps(&self) -> bool {
         self.workspace_launch_apps
+    }
+
+    pub fn workspace_allow_activation(&self) -> bool {
+        self.workspace_allow_activation
     }
 
     pub fn workspace_only(&self) -> bool {
@@ -693,6 +698,8 @@ struct RawDesktopResources {
     #[serde(default)]
     workspace_only: bool,
     #[serde(default)]
+    workspace_allow_activation: bool,
+    #[serde(default)]
     workspace_display_id: Option<u32>,
     #[serde(default)]
     selected_windows_only: bool,
@@ -877,6 +884,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             workspace_space_id,
             workspace_allow_mission_control,
             workspace_only,
+            workspace_allow_activation,
             workspace_display_id,
             selected_windows_only,
             applications: raw_desktop_applications,
@@ -1020,6 +1028,13 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             && (version != 3 || !selected_windows_only || !browser_origins.is_empty())
         {
             return Err("browser.selected_windows_only requires v3 desktop.selected_windows_only and no origin grants".into());
+        }
+        if workspace_allow_activation && (version != 3 || !workspace_only || !selected_windows_only)
+        {
+            return Err(
+                "workspace_allow_activation requires version 3 workspace-only selected windows"
+                    .into(),
+            );
         }
         if workspace_only && (version != 3 || !selected_windows_only) {
             return Err("workspace_only requires version 3 selected windows".into());
@@ -1183,6 +1198,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             workspace_space_id,
             workspace_allow_mission_control,
             workspace_only,
+            workspace_allow_activation,
             workspace_display_id,
             selected_windows_only,
             readable_paths,

@@ -11,7 +11,7 @@ mod invoke_menu;
 mod kill_app;
 pub(crate) mod launch_app;
 mod list_apps;
-mod list_windows;
+pub(crate) mod list_windows;
 mod press_key;
 mod right_click;
 mod scroll;

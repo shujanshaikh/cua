@@ -142,6 +142,14 @@ fn mutate_and_verify(input: &SetWindowFrameInput) -> Result<FrameOutcome, String
     let window_id = u32::try_from(input.window_id)
         .map_err(|_| format!("window_id {} is out of range on macOS", input.window_id))?;
     let requested = Frame::from_input(input);
+    if let Some(context) = cua_driver_core::tool::current_dispatch_authorization_context() {
+        if let Some(selection) = context.selected_windows()? {
+            selection.validate(cua_driver_core::selected_windows::WindowTarget {
+                pid: i64::from(input.pid),
+                window_id: input.window_id,
+            })?;
+        }
+    }
     if !requested.is_valid() {
         return Err("x/y must be finite and width/height must be finite positive numbers".into());
     }
@@ -314,7 +322,11 @@ impl Tool for SetWindowFrameTool {
                 Ok(input) => input,
                 Err(result) => return result,
             };
-        let outcome = match tokio::task::spawn_blocking(move || mutate_and_verify(&input)).await {
+        let outcome = match cua_driver_core::tool::spawn_blocking_with_authorization(move || {
+            mutate_and_verify(&input)
+        })
+        .await
+        {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(error)) => return ToolResult::error(format!("set_window_frame: {error}")),
             Err(error) => {

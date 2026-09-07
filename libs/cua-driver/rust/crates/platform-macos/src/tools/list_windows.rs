@@ -79,7 +79,7 @@ impl Tool for ListWindowsTool {
     }
 }
 
-pub(super) fn window_record_json(w: &crate::windows::WindowInfo) -> Value {
+pub(crate) fn window_record_json(w: &crate::windows::WindowInfo) -> Value {
     serde_json::json!({
         "window_id": w.window_id,
         "pid": w.pid,

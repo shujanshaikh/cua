@@ -16,6 +16,10 @@ pub struct WindowTarget {
 /// An owned native lifetime witness, not a repeated numeric ID lookup.
 pub trait WindowIdentity: Send + Sync + std::any::Any {
     fn validate(&self) -> Result<(), String>;
+    /// Preserve isolated-process ownership when a command replaces its window.
+    fn validate_process_lifetime(&self) -> Result<(), String> {
+        self.validate()
+    }
 }
 
 pub trait WindowSelectionBackend: Send + Sync {
@@ -25,6 +29,7 @@ pub trait WindowSelectionBackend: Send + Sync {
 struct WorkspaceRestriction {
     backend: Arc<dyn crate::workspace::WorkspaceBackend>,
     space: Mutex<Option<u64>>,
+    allow_activation: bool,
 }
 
 pub struct SelectedWindows {
@@ -73,11 +78,34 @@ impl SelectedWindows {
     pub(crate) fn restrict_to_workspace(
         &self,
         backend: Arc<dyn crate::workspace::WorkspaceBackend>,
+        allow_activation: bool,
     ) {
         let _ = self.workspace.set(WorkspaceRestriction {
             backend,
             space: Mutex::new(None),
+            allow_activation,
         });
+    }
+
+    pub(crate) fn allows_activation(&self) -> bool {
+        self.workspace
+            .get()
+            .is_some_and(|workspace| workspace.allow_activation)
+    }
+
+    pub(crate) fn activate_workspace(&self) -> Result<(), String> {
+        let workspace = self
+            .workspace
+            .get()
+            .filter(|w| w.allow_activation)
+            .ok_or("workspace_activation_denied")?;
+        let space = (*workspace.space.lock().unwrap_or_else(|e| e.into_inner()))
+            .ok_or("workspace_access_denied: no owned workspace")?;
+        workspace.backend.reveal(space)?;
+        if workspace.backend.state(space)? != (true, true) {
+            return Err("workspace_activation_failed: owned desktop is not active".into());
+        }
+        Ok(())
     }
 
     /// Only the workspace manager may admit a native-attested window from a
@@ -181,8 +209,8 @@ impl SelectedWindows {
             "start_recording" if args.get("record_video").and_then(Value::as_bool) != Some(true) => Ok(()),
             "get_recording_state" | "stop_recording" => Ok(()),
             "get_browser_state" if args.get("target_id").is_none() => self.validate(Self::target(args)?),
-            "get_browser_state" | "browser_navigate" | "browser_click" | "browser_type" | "browser_dialog" => {
-                if args.get("delivery_mode").and_then(Value::as_str).is_some_and(|mode| mode.eq_ignore_ascii_case("foreground")) { return Err("selected_window_background_required: browser foreground delivery is not admitted".into()); }
+            "get_browser_state" | "browser_navigate" | "browser_click" | "browser_type" | "browser_dialog" | "browser_pointer" | "browser_set_input_files" | "browser_download" => {
+                if !self.allows_activation() && args.get("delivery_mode").and_then(Value::as_str).is_some_and(|mode| mode.eq_ignore_ascii_case("foreground")) { return Err("selected_window_background_required: browser foreground delivery is not admitted".into()); }
                 // Registry must validate implementation-attested native ownership.
                 Ok(())
             }
@@ -191,10 +219,11 @@ impl SelectedWindows {
             | "launch_workspace_app" | "create_workspace" | "get_workspace_state" | "reveal_workspace" | "release_workspace"
             | "restore_workspace_windows" | "delete_workspace" => Ok(()),
             "move_window_to_workspace" => self.native_identity(Self::target(args)?).map(|_| ()),
-            "get_window_state" | "click" | "double_click" | "right_click" | "scroll"
+            "invoke_menu" | "bring_to_front" if self.allows_activation() => self.validate(Self::target(args)?),
+            "get_window_state" | "verify_state" | "click" | "double_click" | "right_click" | "scroll"
             | "drag" | "type_text" | "press_key" | "hotkey"
-            | "set_value" => {
-                if args.get("delivery_mode").and_then(Value::as_str).is_some_and(|mode| mode.eq_ignore_ascii_case("foreground")) {
+            | "set_value" | "set_window_frame" => {
+                if !self.allows_activation() && args.get("delivery_mode").and_then(Value::as_str).is_some_and(|mode| mode.eq_ignore_ascii_case("foreground")) {
                     return Err("selected_window_background_required: foreground delivery is not admitted".into());
                 }
                 self.validate(Self::target(args)?)

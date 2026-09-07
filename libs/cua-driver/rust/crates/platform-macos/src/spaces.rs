@@ -329,12 +329,49 @@ pub fn move_window(window_id: u32, target: u64) -> Result<Vec<u64>, String> {
 /// The shared manager owns session state; this adapter owns only native calls.
 pub struct MacosWorkspaces;
 impl cua_driver_core::workspace::WorkspaceBackend for MacosWorkspaces {
+    fn discover_windows(
+        &self,
+        anchor: &cua_driver_core::workspace::LaunchedWorkspaceWindow,
+        known: &[cua_driver_core::selected_windows::WindowTarget],
+    ) -> Result<Vec<cua_driver_core::workspace::LaunchedWorkspaceWindow>, String> {
+        use cua_driver_core::selected_windows::{WindowSelectionBackend, WindowTarget};
+        anchor.identity.validate_process_lifetime()?;
+        let mut attempts = 0;
+        let found = loop {
+            let mut found = Vec::new();
+            for window in crate::windows::all_windows()
+                .into_iter()
+                .filter(|w| i64::from(w.pid) == anchor.target.pid)
+            {
+                let target = WindowTarget {
+                    pid: i64::from(window.pid),
+                    window_id: u64::from(window.window_id),
+                };
+                if known.contains(&target) {
+                    continue;
+                }
+                if let Ok(identity) = crate::selected_windows::MacosWindowSelection.bind(target) {
+                    found.push(cua_driver_core::workspace::LaunchedWorkspaceWindow {
+                        target,
+                        identity,
+                    });
+                }
+            }
+            if !found.is_empty() || anchor.identity.validate().is_ok() || attempts >= 5 {
+                break found;
+            }
+            attempts += 1;
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        anchor.identity.validate_process_lifetime()?;
+        Ok(found)
+    }
     fn launch_app(
         &self,
         args: &serde_json::Value,
     ) -> Result<
         (
-            cua_driver_core::workspace::LaunchedWorkspaceWindow,
+            Vec<cua_driver_core::workspace::LaunchedWorkspaceWindow>,
             serde_json::Value,
         ),
         String,

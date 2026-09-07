@@ -2351,6 +2351,18 @@ impl Tool for BrowserSetInputFilesTool {
         &self.def
     }
 
+    async fn protected_resource_scope(
+        &self,
+        adapter_id: &str,
+        args: &Value,
+    ) -> Result<Option<Value>, String> {
+        if adapter_id == "browser_bound_input" {
+            browser_protected_resource_scope(&self.engine, args, "browser_set_input_files").await
+        } else {
+            Ok(None)
+        }
+    }
+
     async fn invoke(&self, args: Value) -> ToolResult {
         let (target_id, tab_id, ext_ref) = match (
             args.require_str("target_id"),

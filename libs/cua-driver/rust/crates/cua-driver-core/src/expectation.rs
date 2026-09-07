@@ -82,6 +82,16 @@ impl ObservationProvider for ToolObservationProvider {
         include_elements: bool,
         include_screenshot: bool,
     ) -> Result<ObservationSample, String> {
+        // Polling bypasses ToolRegistry, so recheck the live selection before
+        // every sample, including metadata-only checks and the final screenshot.
+        if let Some(context) = crate::tool::current_dispatch_authorization_context() {
+            if context.is_revoked() || context.is_expired() {
+                return Err("authorization_revoked: verification session ended".into());
+            }
+            if let Some(selection) = context.selected_windows()? {
+                selection.validate(crate::selected_windows::WindowTarget { pid, window_id })?;
+            }
+        }
         let listed = self
             .list_windows
             .invoke(json!({"pid": pid, "on_screen_only": false}))
