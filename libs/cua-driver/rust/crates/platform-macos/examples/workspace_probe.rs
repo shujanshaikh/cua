@@ -1,4 +1,5 @@
-//! Content-free native investigation. Never activate personal windows.
+//! Content-free native investigation. `--reveal` visibly selects a desktop;
+//! use only with explicit authorization. Never activate personal windows.
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     println!("accessibility={}", unsafe {
@@ -35,6 +36,16 @@ fn main() {
                     .position(|a| a == "--display")
                     .map(|i| args[i + 1].parse().unwrap())
             )
+        );
+    }
+    if let Some(index) = args.iter().position(|arg| arg == "--reveal") {
+        use cua_driver_core::workspace::WorkspaceBackend;
+        let space = args[index + 1]
+            .parse()
+            .expect("--reveal requires a Space ID");
+        println!(
+            "reveal={:?}",
+            platform_macos::spaces::MacosWorkspaces.reveal(space)
         );
     }
     if args.iter().any(|arg| arg == "--create") {

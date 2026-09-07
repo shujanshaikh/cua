@@ -58,9 +58,10 @@ type Notify = unsafe extern "C" fn(*const c_void, i32);
 struct MissionControl {
     dock: Element,
     notify: Notify,
+    dismiss_on_drop: bool,
 }
 impl MissionControl {
-    fn open() -> Result<Self, String> {
+    fn dock() -> Result<Element, String> {
         if !unsafe { AXIsProcessTrusted() } {
             return Err(
                 "workspace_permission_required: Accessibility permission is required".into(),
@@ -82,6 +83,10 @@ impl MissionControl {
         unsafe {
             AXUIElementSetMessagingTimeout(dock.0, 0.25);
         }
+        Ok(dock)
+    }
+    fn open() -> Result<Self, String> {
+        let dock = Self::dock()?;
         // Do not take over Mission Control if the user is already interacting.
         if dock.child("mc").is_some() {
             return Err("workspace_setup_busy: Mission Control is already open".into());
@@ -91,6 +96,7 @@ impl MissionControl {
         let result = Self {
             dock,
             notify: unsafe { std::mem::transmute::<*mut c_void, Notify>(pointer) },
+            dismiss_on_drop: true,
         };
         result.toggle();
         Ok(result)
@@ -131,9 +137,32 @@ impl MissionControl {
 impl Drop for MissionControl {
     fn drop(&mut self) {
         // Only dismiss the setup we opened; never use global keyboard events.
-        if self.dock.child("mc").is_some() {
+        // A successful desktop AXPress already requests dismissal. Sending
+        // another toggle during that animation can reopen Mission Control.
+        if self.dismiss_on_drop && self.dock.child("mc").is_some() {
             self.toggle();
+            let _ = wait_for_transition(Duration::from_secs(2), || {
+                Ok(self.dock.child("mc").is_none())
+            });
         }
+    }
+}
+
+/// A changed Space ID alone is not a usable desktop while Mission Control
+/// still owns the screen. Keep setup serialized until both conditions settle.
+fn wait_for_transition(
+    timeout: Duration,
+    mut ready: impl FnMut() -> Result<bool, String>,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if ready()? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("workspace_transition_incomplete: desktop selection or Mission Control dismissal did not finish; no app operation was started".into());
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -192,7 +221,7 @@ pub(super) fn create(display: Option<u32>) -> Result<u64, String> {
     }
 }
 
-/// Explicit switching only. Never called by movement, capture, or input.
+/// Explicit switching, including host-authorized foreground workspace operations.
 pub(super) fn reveal(space: u64) -> Result<(), String> {
     operate(space, false)
 }
@@ -232,6 +261,11 @@ fn operate(space: u64, delete: bool) -> Result<(), String> {
     {
         return if delete {
             Err("workspace_active: explicit deletion requires an inactive desktop".into())
+        } else if MissionControl::dock()?.child("mc").is_some() {
+            Err(
+                "workspace_setup_busy: desktop is selected but Mission Control is still open"
+                    .into(),
+            )
         } else {
             Ok(())
         };
@@ -252,7 +286,7 @@ fn operate(space: u64, delete: bool) -> Result<(), String> {
         }
         ensure_empty(space)?;
     }
-    let mc = MissionControl::open()?;
+    let mut mc = MissionControl::open()?;
     std::thread::sleep(Duration::from_millis(300));
     let list = mc
         .spaces(display)?
@@ -279,18 +313,23 @@ fn operate(space: u64, delete: bool) -> Result<(), String> {
             "workspace_operation_unsupported: {action} returned {status}"
         ));
     }
+    if !delete {
+        // Hammerspoon's gotoSpace also deliberately avoids closeMissionControl
+        // after accepted AXPress: Dock closes it as part of the selection.
+        mc.dismiss_on_drop = false;
+        return wait_for_transition(Duration::from_secs(2), || {
+            let after = managed_displays()?;
+            let selected = display_row(&after, display)
+                .and_then(|d| d.pointer("/Current Space/ManagedSpaceID"))
+                .and_then(Value::as_u64)
+                == Some(space);
+            Ok(selected && mc.dock.child("mc").is_none())
+        });
+    }
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let after = managed_displays()?;
-        if delete && !contains_space(&after, space) {
-            return Ok(());
-        }
-        if !delete
-            && display_row(&after, display)
-                .and_then(|d| d.pointer("/Current Space/ManagedSpaceID"))
-                .and_then(Value::as_u64)
-                == Some(space)
-        {
+        if !contains_space(&after, space) {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -299,5 +338,39 @@ fn operate(space: u64, delete: bool) -> Result<(), String> {
             ));
         }
         std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_waits_for_mission_control_dismissal() {
+        let mut observations = [(true, true), (true, true), (true, false)].into_iter();
+        let mut count = 0;
+        wait_for_transition(Duration::from_secs(1), || {
+            count += 1;
+            let (selected, mission_control_open) = observations.next().unwrap();
+            Ok(selected && !mission_control_open)
+        })
+        .unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn closed_mission_control_without_destination_is_not_success() {
+        assert!(wait_for_transition(Duration::ZERO, || Ok(false)).is_err());
+    }
+
+    #[test]
+    fn transition_propagates_failed_state_readback() {
+        let error =
+            wait_for_transition(
+                Duration::from_secs(1),
+                || Err("display disconnected".into()),
+            )
+            .unwrap_err();
+        assert_eq!(error, "display disconnected");
     }
 }

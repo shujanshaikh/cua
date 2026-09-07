@@ -200,3 +200,20 @@ before app launch; a subsequent attempt succeeded. Mission Control switching
 reliability therefore remains unresolved. The final reporting correction has
 focused automated coverage; the native launch and editing evidence preceded that
 reporting-only correction. These checks do not certify all applications or routes.
+
+### Mission Control transition correction (2026-09-08)
+
+Desktop selection must finish both the Space change and Mission Control dismissal
+before foreground app work begins. An accepted desktop AXPress already initiates
+dismissal, so cleanup must not send a second toggle during that animation. The
+already-selected shortcut also refuses while Mission Control is open. These
+checks apply to the macOS workspace adapter; other platforms do not implement
+native workspace selection.
+
+During a reported desktop freeze, readback showed the selected desktop still in
+Mission Control. Escape removed the overview and Finder's desktop control changed
+from disabled to enabled. The patched native probe subsequently selected Space
+4722 with Mission Control absent and recovered AX windows for the existing test
+apps. CG visibility still reported off-screen, so this establishes transition and
+AX recovery, not complete visual recovery or proof of the original trigger.
+Three focused transition tests passed. No desktop matrix certification was run.
