@@ -4,7 +4,7 @@
 //! launcher responsibility. The manifest only narrows the built-in,
 //! managed, and user policy layers; it cannot introduce unreviewed tools.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -49,6 +49,7 @@ pub struct SessionManifest {
     workspace_allow_mission_control: bool,
     workspace_only: bool,
     workspace_display_id: Option<u32>,
+    workspace_applications: HashMap<String, crate::workspace::WorkspaceApplication>,
     readable_paths: HashSet<String>,
     writable_paths: HashSet<String>,
     readable_roots: Vec<PathGrant>,
@@ -84,6 +85,21 @@ struct PathGrant {
 }
 
 impl SessionManifest {
+    pub fn workspace_application_aliases(&self) -> Vec<String> {
+        let mut aliases: Vec<_> = self.workspace_applications.keys().cloned().collect();
+        aliases.sort();
+        aliases
+    }
+
+    pub fn workspace_application(
+        &self,
+        alias: &str,
+    ) -> Result<&crate::workspace::WorkspaceApplication, String> {
+        self.workspace_applications
+            .get(alias)
+            .ok_or_else(|| "workspace_app_denied: app alias is not in trusted configuration".into())
+    }
+
     pub fn workspace_only(&self) -> bool {
         self.workspace_only
     }
@@ -636,6 +652,8 @@ struct RawExistingProfile {
 #[serde(deny_unknown_fields)]
 struct RawDesktopResources {
     #[serde(default)]
+    workspace_applications: HashMap<String, crate::workspace::WorkspaceApplication>,
+    #[serde(default)]
     workspace_space_id: Option<u64>,
     #[serde(default)]
     workspace_allow_mission_control: bool,
@@ -820,6 +838,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             origins: raw_browser_origins,
         } = browser;
         let RawDesktopResources {
+            workspace_applications,
             workspace_space_id,
             workspace_allow_mission_control,
             workspace_only,
@@ -984,6 +1003,32 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             );
         }
         let applications = validate_applications(raw_applications)?;
+        if !workspace_applications.is_empty()
+            && (version != 3 || !workspace_only || !selected_windows_only)
+        {
+            return Err(
+                "workspace_applications requires version 3 workspace-only selected windows".into(),
+            );
+        }
+        for (alias, recipe) in &workspace_applications {
+            if alias.is_empty()
+                || alias.len() > 64
+                || !alias
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            {
+                return Err("workspace application aliases must be short ASCII identifiers".into());
+            }
+            if recipe.bundle_id.trim().is_empty()
+                || !applications.iter().any(|grant| {
+                    grant.bundle_id.as_deref() == Some(recipe.bundle_id.as_str())
+                        && grant.launch
+                        && grant.all_windows
+                })
+            {
+                return Err("workspace application requires a matching launch-enabled apps resource; exact runtime selection still restricts all observations and input".into());
+            }
+        }
         let mut desktop_windows = HashSet::new();
         for window in raw_desktop_windows {
             if window.pid <= 0 || window.window_id == 0 {
@@ -1092,6 +1137,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             desktop_applications,
             desktop_windows,
             desktop_display,
+            workspace_applications,
             workspace_space_id,
             workspace_allow_mission_control,
             workspace_only,
@@ -1485,6 +1531,28 @@ mod tests {
             ),
         ] {
             assert!(manifest(&invalid).is_err());
+        }
+    }
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn workspace_launch_recipes_require_explicit_launch_and_window_isolation() {
+        let source = r#"{"version":3,"resources":{"apps":[{"bundle_id":"com.test.app","launch":true}],"desktop":{"selected_windows_only":true,"workspace_only":true,"workspace_applications":{"notes":{"bundle_id":"com.test.app"}}}},"allow":{"tools":["launch_workspace_app"]}}"#;
+        let loaded = manifest(source).unwrap();
+        assert_eq!(loaded.workspace_application_aliases(), vec!["notes"]);
+        assert!(loaded.workspace_application("unapproved").is_err());
+        for invalid in [
+            source.replace("\"version\":3", "\"version\":2"),
+            source.replace("\"workspace_only\":true", "\"workspace_only\":false"),
+            source.replace(
+                "\"selected_windows_only\":true",
+                "\"selected_windows_only\":false",
+            ),
+            source.replace("\"launch\":true", "\"launch\":false"),
+            source.replace("\"notes\":", "\"../notes\":"),
+            source.replace("\"notes\":{", "\"notes\":{\"pid\":123,"),
+        ] {
+            assert!(manifest(&invalid).is_err(), "accepted {invalid}");
         }
     }
 

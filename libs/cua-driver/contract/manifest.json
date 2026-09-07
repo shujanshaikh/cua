@@ -433,6 +433,12 @@
           "active": {
             "type": "boolean"
           },
+          "available_apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "owned": {
             "type": "boolean"
           },
@@ -498,6 +504,7 @@
           }
         },
         "required": [
+          "available_apps",
           "owned",
           "space_created",
           "space_exists",
@@ -548,6 +555,12 @@
           "active": {
             "type": "boolean"
           },
+          "available_apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "owned": {
             "type": "boolean"
           },
@@ -613,6 +626,7 @@
           }
         },
         "required": [
+          "available_apps",
           "owned",
           "space_created",
           "space_exists",
@@ -1693,6 +1707,12 @@
           "active": {
             "type": "boolean"
           },
+          "available_apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "owned": {
             "type": "boolean"
           },
@@ -1758,6 +1778,7 @@
           }
         },
         "required": [
+          "available_apps",
           "owned",
           "space_created",
           "space_exists",
@@ -2149,6 +2170,134 @@
         "required": [
           "effect",
           "route"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "launch_workspace_app",
+      "description": "Launch a trusted configured app in a fresh process, approve only its exact initial window, and move it into this session workspace without switching desktops. The app argument is a trusted alias, never a bundle ID, path, URL, or launch arguments. Existing processes and ambiguous windows refuse. Repeated calls return the same session-created window; closed windows require a new session. Unsupported platforms refuse.",
+      "platforms": [
+        "macos",
+        "windows",
+        "linux"
+      ],
+      "capabilities": [
+        "session.workspace"
+      ],
+      "annotations": {
+        "read_only": false,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": true
+      },
+      "schema_mode": "canonical_runtime",
+      "cursor_semantics": {
+        "action": "system"
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "description": "Alias from the trusted workspace_applications configuration.",
+            "type": "string"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "app"
+        ],
+        "type": "object"
+      },
+      "success_output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "available_apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "owned": {
+            "type": "boolean"
+          },
+          "private_api": {
+            "type": "boolean"
+          },
+          "space_created": {
+            "type": "boolean"
+          },
+          "space_exists": {
+            "type": "boolean"
+          },
+          "space_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "windows": {
+            "items": {
+              "properties": {
+                "current_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "original_space_ids": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "pid": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "window_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pid",
+                "window_id",
+                "original_space_ids",
+                "current_space_ids",
+                "state"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "available_apps",
+          "owned",
+          "space_created",
+          "space_exists",
+          "active",
+          "private_api",
+          "windows"
         ],
         "type": "object"
       }
@@ -2557,6 +2706,12 @@
           "active": {
             "type": "boolean"
           },
+          "available_apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "owned": {
             "type": "boolean"
           },
@@ -2622,6 +2777,7 @@
           }
         },
         "required": [
+          "available_apps",
           "owned",
           "space_created",
           "space_exists",
@@ -2889,6 +3045,12 @@
           "active": {
             "type": "boolean"
           },
+          "available_apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "owned": {
             "type": "boolean"
           },
@@ -2954,6 +3116,7 @@
           }
         },
         "required": [
+          "available_apps",
           "owned",
           "space_created",
           "space_exists",
@@ -3004,6 +3167,12 @@
           "active": {
             "type": "boolean"
           },
+          "available_apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "owned": {
             "type": "boolean"
           },
@@ -3069,6 +3238,7 @@
           }
         },
         "required": [
+          "available_apps",
           "owned",
           "space_created",
           "space_exists",
@@ -3119,6 +3289,12 @@
           "active": {
             "type": "boolean"
           },
+          "available_apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "owned": {
             "type": "boolean"
           },
@@ -3184,6 +3360,7 @@
           }
         },
         "required": [
+          "available_apps",
           "owned",
           "space_created",
           "space_exists",

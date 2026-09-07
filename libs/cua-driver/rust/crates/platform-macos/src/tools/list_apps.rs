@@ -49,6 +49,24 @@ impl Tool for ListAppsTool {
         def()
     }
 
+    async fn protected_resource_scope(
+        &self,
+        adapter_id: &str,
+        args: &Value,
+    ) -> Result<Option<Value>, String> {
+        if adapter_id != "application_identity" {
+            return Ok(None);
+        }
+        let pid = args
+            .get("pid")
+            .and_then(Value::as_i64)
+            .and_then(|pid| i32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or("application identity requires a positive pid")?;
+        Ok(crate::apps::bundle_id_for_pid(pid)
+            .map(|bundle_id| serde_json::json!({"bundle_id": bundle_id})))
+    }
+
     async fn invoke(&self, _args: Value) -> ToolResult {
         let apps = tokio::task::spawn_blocking(crate::apps::list_all_apps)
             .await

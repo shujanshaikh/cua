@@ -10,6 +10,7 @@ use core_foundation::{
 };
 use serde_json::Value;
 use std::ffi::c_void;
+mod launch;
 mod mission_control;
 
 /// Explicitly authorized, visible Mission Control setup. Never a background fallback.
@@ -302,6 +303,12 @@ pub fn move_window(window_id: u32, target: u64) -> Result<Vec<u64>, String> {
 /// The shared manager owns session state; this adapter owns only native calls.
 pub struct MacosWorkspaces;
 impl cua_driver_core::workspace::WorkspaceBackend for MacosWorkspaces {
+    fn launch(
+        &self,
+        recipe: &cua_driver_core::workspace::WorkspaceApplication,
+    ) -> Result<cua_driver_core::workspace::LaunchedWorkspaceWindow, String> {
+        launch::launch(recipe)
+    }
     fn create_with_options(
         &self,
         options: cua_driver_core::workspace::WorkspaceCreationOptions,

@@ -875,7 +875,8 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
         | "probe" => RiskClass::R0,
 
         // Local reversible control and lifecycle operations.
-        "create_workspace"
+        "launch_workspace_app"
+        | "create_workspace"
         | "move_window_to_workspace"
         | "reveal_workspace"
         | "release_workspace"

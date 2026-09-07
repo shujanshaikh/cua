@@ -3,7 +3,7 @@
 
 use crate::{
     protocol::ToolResult,
-    selected_windows::{SelectedWindows, WindowTarget},
+    selected_windows::{SelectedWindows, WindowIdentity, WindowTarget},
     tool::{Tool, ToolDef, ToolRegistry},
 };
 use async_trait::async_trait;
@@ -21,7 +21,26 @@ pub struct WorkspaceCreationOptions {
     pub display_id: Option<u32>,
 }
 
+/// Launch recipes are loaded by the trusted host, never accepted as tool arguments.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceApplication {
+    pub bundle_id: String,
+    #[serde(default)]
+    pub arguments: Vec<String>,
+    #[serde(default)]
+    pub urls: Vec<String>,
+}
+
+pub struct LaunchedWorkspaceWindow {
+    pub target: WindowTarget,
+    pub identity: Arc<dyn WindowIdentity>,
+}
+
 pub trait WorkspaceBackend: Send + Sync {
+    fn launch(&self, _recipe: &WorkspaceApplication) -> Result<LaunchedWorkspaceWindow, String> {
+        Err("workspace_operation_unsupported: isolated workspace app launch is unavailable".into())
+    }
     fn create(&self) -> Result<u64, String>;
     fn create_with_options(&self, _options: WorkspaceCreationOptions) -> Result<u64, String> {
         self.create()
@@ -63,6 +82,8 @@ struct Workspace {
     created: bool,
     // Preserve the first origin even after retries and partial native failures.
     moved: HashMap<WindowTarget, Vec<u64>>,
+    launched: HashMap<String, WindowTarget>,
+    launch_failures: HashMap<String, String>,
 }
 
 struct Workspaces {
@@ -76,8 +97,16 @@ impl Workspaces {
         workspace: Option<&Workspace>,
         selection: &SelectedWindows,
     ) -> Result<WorkspaceStateOutput, String> {
+        let available_apps = crate::tool::current_dispatch_authorization_context()
+            .and_then(|context| {
+                context
+                    .capability_manifest()
+                    .map(|m| m.workspace_application_aliases())
+            })
+            .unwrap_or_default();
         let Some(workspace) = workspace else {
             return Ok(WorkspaceStateOutput {
+                available_apps,
                 owned: false,
                 space_id: None,
                 space_created: false,
@@ -112,6 +141,7 @@ impl Workspaces {
             })
             .collect();
         Ok(WorkspaceStateOutput {
+            available_apps,
             owned: true,
             space_id: Some(workspace.space),
             space_created: workspace.created,
@@ -166,6 +196,8 @@ impl Workspaces {
                             space,
                             created: attached.is_none(),
                             moved: HashMap::new(),
+                            launched: HashMap::new(),
+                            launch_failures: HashMap::new(),
                         },
                     );
                 }
@@ -190,6 +222,62 @@ impl Workspaces {
                     .get_mut(session)
                     .ok_or("workspace_not_found: this session owns no workspace")?;
                 match name {
+                    "launch_workspace_app" => {
+                        let alias = args
+                            .get("app")
+                            .and_then(Value::as_str)
+                            .ok_or("workspace_app_required")?;
+                        let recipe = context
+                            .capability_manifest()
+                            .ok_or("workspace_requires_manifest")?
+                            .workspace_application(alias)?;
+                        if !self.backend.state(workspace.space)?.0 {
+                            return Err(
+                                "workspace_space_deleted: cannot launch into a missing workspace"
+                                    .into(),
+                            );
+                        }
+                        if let Some(error) = workspace.launch_failures.get(alias) {
+                            return Err(error.clone());
+                        }
+                        if let Some(target) = workspace.launched.get(alias) {
+                            selection.validate(*target)?;
+                            // Do not override a later user placement on an idempotent call.
+                        } else {
+                            let launched = match self.backend.launch(recipe) {
+                                Ok(launched) => launched,
+                                Err(error) => {
+                                    // A native error may still have created a process. Retain
+                                    // the outcome rather than repeatedly spawning on retries.
+                                    workspace
+                                        .launch_failures
+                                        .insert(alias.into(), error.clone());
+                                    return Err(error);
+                                }
+                            };
+                            if context.is_revoked() || context.is_expired() {
+                                return Err("authorization_revoked: launch completed after session ended; no window access granted".into());
+                            }
+                            let target = launched.target;
+                            if let Err(error) =
+                                selection.admit_launched_window(target, launched.identity)
+                            {
+                                workspace
+                                    .launch_failures
+                                    .insert(alias.into(), error.clone());
+                                return Err(error);
+                            }
+                            workspace.launched.insert(alias.into(), target);
+                            workspace.moved.insert(target, vec![]);
+                            let origin = self.backend.membership(target)?;
+                            if origin.len() != 1 {
+                                return Err("workspace_launch_incomplete: ambiguous initial membership; window retained for explicit recovery".into());
+                            }
+                            workspace.moved.insert(target, origin);
+                            self.backend.move_window(target, workspace.space)?;
+                            selection.validate(target)?;
+                        }
+                    }
                     "move_window_to_workspace" => {
                         let target = SelectedWindows::target(args)?;
                         selection.native_identity(target)?;
@@ -217,6 +305,9 @@ impl Workspaces {
                         for (&target, origin) in &workspace.moved {
                             let outcome = (|| {
                                 selection.native_identity(target)?;
+                                if origin.len() != 1 {
+                                    return Err("workspace_restore_incomplete: original membership is unavailable".into());
+                                }
                                 let current = self.backend.membership(target)?;
                                 if &current == origin {
                                     return Ok(());
@@ -281,6 +372,7 @@ impl Tool for WorkspaceTool {
         }
         let checked = match self.def.name.as_str() {
             "create_workspace" => check!(CreateWorkspaceInput),
+            "launch_workspace_app" => check!(LaunchWorkspaceAppInput),
             "get_workspace_state" => check!(GetWorkspaceStateInput),
             "move_window_to_workspace" => check!(MoveWindowToWorkspaceInput),
             "reveal_workspace" => check!(RevealWorkspaceInput),
@@ -369,6 +461,8 @@ mod tests {
         membership: Mutex<HashMap<WindowTarget, Vec<u64>>>,
         state_fails: std::sync::atomic::AtomicBool,
         deleted: std::sync::atomic::AtomicBool,
+        launch_count: std::sync::atomic::AtomicUsize,
+        launch_fails: std::sync::atomic::AtomicBool,
     }
     impl WindowSelectionBackend for Native {
         fn bind(&self, _: WindowTarget) -> Result<Arc<dyn WindowIdentity>, String> {
@@ -376,6 +470,23 @@ mod tests {
         }
     }
     impl WorkspaceBackend for Native {
+        fn launch(&self, _: &WorkspaceApplication) -> Result<LaunchedWorkspaceWindow, String> {
+            self.launch_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.launch_fails.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(
+                    "workspace_launch_ambiguous: native process created without a unique window"
+                        .into(),
+                );
+            }
+            Ok(LaunchedWorkspaceWindow {
+                target: WindowTarget {
+                    pid: 50,
+                    window_id: 51,
+                },
+                identity: Arc::new(Live),
+            })
+        }
         fn create(&self) -> Result<u64, String> {
             Ok(100)
         }
@@ -413,8 +524,8 @@ mod tests {
     ) -> Arc<EffectiveAuthorizationContext> {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), serde_json::to_vec(&json!({
-            "version":3,"resources":{"desktop":{"selected_windows_only":true,"workspace_only":true,"windows":windows,"workspace_space_id":100}},
-            "allow":{"tools":["create_workspace","get_workspace_state","move_window_to_workspace","reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace","end_session","list_windows"]}
+            "version":3,"resources":{"apps":[{"bundle_id":"com.test.app","launch":true}],"desktop":{"workspace_applications":{"notes":{"bundle_id":"com.test.app"}},"selected_windows_only":true,"workspace_only":true,"windows":windows,"workspace_space_id":100}},
+            "allow":{"tools":["launch_workspace_app","create_workspace","get_workspace_state","move_window_to_workspace","reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace","end_session","list_windows"]}
         })).unwrap()).unwrap();
         let manifest = Arc::new(crate::session_manifest::load_manifest(file.path()).unwrap());
         let (host, connection) = registry.trusted_in_process_binding();
@@ -435,6 +546,174 @@ mod tests {
         registry
             .resolve_delegated(&connection, session, &format!("transport-{session}"))
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn workspace_launch_uses_trusted_alias_and_admits_only_attested_window() {
+        let native = Arc::new(Native::default());
+        let auth = SessionAuthorizationRegistry::with_ceiling(
+            SessionModeCeiling::for_trusted_sessions(
+                [PermissionMode::Standard],
+                false,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
+        let selected = context(&auth, "launch", &[]);
+        let other = context(&auth, "other", &[]);
+        let mut tools = ToolRegistry::new();
+        tools.set_window_selection_backend(native.clone());
+        tools.set_workspace_backend(native.clone());
+        tools.register_session_tools();
+        tools.bind_selected_windows(&selected).unwrap();
+        tools.bind_selected_windows(&other).unwrap();
+        let call = |name: &'static str, args: Value| {
+            tools.invoke_with_context(name, args, selected.clone())
+        };
+        assert_eq!(
+            call(
+                "launch_workspace_app",
+                json!({"session":"launch","app":"notes"})
+            )
+            .await
+            .is_error,
+            Some(true)
+        );
+        assert_ne!(
+            call("create_workspace", json!({"session":"launch"}))
+                .await
+                .is_error,
+            Some(true)
+        );
+        assert_eq!(
+            call(
+                "launch_workspace_app",
+                json!({"session":"launch","app":"unapproved"})
+            )
+            .await
+            .is_error,
+            Some(true)
+        );
+        assert_eq!(
+            call(
+                "launch_workspace_app",
+                json!({"session":"launch","app":"notes","pid":999})
+            )
+            .await
+            .is_error,
+            Some(true)
+        );
+        assert_eq!(
+            native
+                .launch_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        for _ in 0..2 {
+            let result = call(
+                "launch_workspace_app",
+                json!({"session":"launch","app":"notes"}),
+            )
+            .await;
+            assert_ne!(result.is_error, Some(true), "{result:?}");
+        }
+        assert_eq!(
+            native
+                .launch_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        let target = WindowTarget {
+            pid: 50,
+            window_id: 51,
+        };
+        let selection = selected.selected_windows().unwrap().unwrap();
+        assert!(selection.validate(target).is_ok());
+        assert!(selection
+            .validate(WindowTarget {
+                pid: 50,
+                window_id: 52
+            })
+            .is_err());
+        assert!(other
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(target)
+            .is_err());
+        native.membership.lock().unwrap().insert(target, vec![1]);
+        assert_eq!(
+            call(
+                "launch_workspace_app",
+                json!({"session":"launch","app":"notes"})
+            )
+            .await
+            .is_error,
+            Some(true)
+        );
+        assert_eq!(native.membership(target).unwrap(), vec![1]);
+        assert_eq!(
+            native
+                .launch_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn partial_launch_failure_does_not_spawn_again_on_retry() {
+        let native = Arc::new(Native::default());
+        native
+            .launch_fails
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let auth = SessionAuthorizationRegistry::with_ceiling(
+            SessionModeCeiling::for_trusted_sessions(
+                [PermissionMode::Standard],
+                false,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
+        let selected = context(&auth, "failed-launch", &[]);
+        let mut tools = ToolRegistry::new();
+        tools.set_window_selection_backend(native.clone());
+        tools.set_workspace_backend(native.clone());
+        tools.register_session_tools();
+        tools.bind_selected_windows(&selected).unwrap();
+        let call = |name: &'static str, args: Value| {
+            tools.invoke_with_context(name, args, selected.clone())
+        };
+        assert_ne!(
+            call("create_workspace", json!({"session":"failed-launch"}))
+                .await
+                .is_error,
+            Some(true)
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                call(
+                    "launch_workspace_app",
+                    json!({"session":"failed-launch","app":"notes"})
+                )
+                .await
+                .is_error,
+                Some(true)
+            );
+        }
+        assert_eq!(
+            native
+                .launch_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(selected
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .live_targets()
+            .is_empty());
     }
 
     #[tokio::test]

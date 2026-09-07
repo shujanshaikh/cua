@@ -82,6 +82,37 @@ struct Identity {
     element: usize,
 }
 
+/// Match an explicitly requested document using AXDocument on an already
+/// bound native object. Titles and geometry never establish this identity.
+pub(crate) fn matches_document(identity: &dyn WindowIdentity, path: &std::path::Path) -> bool {
+    let Some(identity) = (identity as &dyn std::any::Any).downcast_ref::<Identity>() else {
+        return false;
+    };
+    let Some(document) =
+        (unsafe { copy_string_attr(identity.element as AXUIElementRef, "AXDocument") })
+    else {
+        return false;
+    };
+    if !document.starts_with("file://") {
+        return false;
+    }
+    let Some(url) = (unsafe {
+        objc2_foundation::NSURL::URLWithString(&objc2_foundation::NSString::from_str(&document))
+    }) else {
+        return false;
+    };
+    let Some(actual) = (unsafe { url.path() }) else {
+        return false;
+    };
+    match (
+        std::fs::canonicalize(actual.to_string()),
+        std::fs::canonicalize(path),
+    ) {
+        (Ok(actual), Ok(expected)) => actual == expected,
+        _ => false,
+    }
+}
+
 impl Drop for Identity {
     fn drop(&mut self) {
         unsafe {
@@ -153,6 +184,22 @@ impl WindowSelectionBackend for MacosWindowSelection {
                     exact = Some(window as usize);
                 } else {
                     CFRelease(window as CFTypeRef);
+                }
+            }
+            // AppKit can omit an inactive desktop's window from AXWindows
+            // while retaining it as AXMainWindow. Read these references only;
+            // neither focus nor main-window status is changed. The exact
+            // CGWindowID must match before this can become a witness.
+            for attribute in ["AXMainWindow", "AXFocusedWindow"] {
+                if exact.is_some() {
+                    break;
+                }
+                if let Some(window) = copy_element_attr(app, attribute) {
+                    if ax_get_window_id(window) == Some(wid) {
+                        exact = Some(window as usize);
+                    } else {
+                        CFRelease(window as CFTypeRef);
+                    }
                 }
             }
             CFRelease(app as CFTypeRef);

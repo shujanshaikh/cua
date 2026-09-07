@@ -2282,6 +2282,52 @@ const FfiConverterTypeInvokeMenuInput = (() => {
     return new FFIConverter();
 })();
 
+export type LaunchWorkspaceAppInput = {
+    session?: string,
+    /**
+     * Alias from the trusted workspace_applications configuration.
+     */
+    app: string
+}
+
+/**
+ * Generated factory for {@link LaunchWorkspaceAppInput} record objects.
+ */
+export const LaunchWorkspaceAppInput = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<LaunchWorkspaceAppInput, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        create,
+        new: create,
+        defaults: () => Object.freeze(defaults()) as Partial<LaunchWorkspaceAppInput>,
+    });
+})();
+
+const FfiConverterTypeLaunchWorkspaceAppInput = (() => {
+    type TypeName = LaunchWorkspaceAppInput;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                session: FfiConverterOptionalString.read(from),
+                app: FfiConverterString.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterOptionalString.write(value.session, into);
+            FfiConverterString.write(value.app, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterOptionalString.allocationSize(value.session) +
+             FfiConverterString.allocationSize(value.app);
+
+        }
+    };
+    return new FFIConverter();
+})();
+
 export type ListSessionsInput = {
     /**
      * Maximum number of content-free summaries to return (default 50, max
@@ -4061,6 +4107,7 @@ const FfiConverterTypeWorkspaceWindowState = (() => {
 })();
 
 export type WorkspaceStateOutput = {
+    availableApps: Array<string>,
     owned: boolean,
     spaceId?: bigint,
     spaceCreated: boolean,
@@ -4091,6 +4138,7 @@ const FfiConverterTypeWorkspaceStateOutput = (() => {
     class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
         read(from: RustBuffer): TypeName {
             return {
+                availableApps: FfiConverterSequenceString.read(from),
                 owned: FfiConverterBool.read(from),
                 spaceId: FfiConverterOptionalUInt64.read(from),
                 spaceCreated: FfiConverterBool.read(from),
@@ -4101,6 +4149,7 @@ const FfiConverterTypeWorkspaceStateOutput = (() => {
             };
         }
         write(value: TypeName, into: RustBuffer): void {
+            FfiConverterSequenceString.write(value.availableApps, into);
             FfiConverterBool.write(value.owned, into);
             FfiConverterOptionalUInt64.write(value.spaceId, into);
             FfiConverterBool.write(value.spaceCreated, into);
@@ -4110,7 +4159,8 @@ const FfiConverterTypeWorkspaceStateOutput = (() => {
             FfiConverterSequenceTypeWorkspaceWindowState.write(value.windows, into);
         }
         allocationSize(value: TypeName): number {
-            return FfiConverterBool.allocationSize(value.owned) +
+            return FfiConverterSequenceString.allocationSize(value.availableApps) +
+             FfiConverterBool.allocationSize(value.owned) +
              FfiConverterOptionalUInt64.allocationSize(value.spaceId) +
              FfiConverterBool.allocationSize(value.spaceCreated) +
              FfiConverterBool.allocationSize(value.spaceExists) +
@@ -4311,6 +4361,7 @@ export default Object.freeze({
     FfiConverterTypeGetWorkspaceStateInput,
     FfiConverterTypeHotkeyInput,
     FfiConverterTypeInvokeMenuInput,
+    FfiConverterTypeLaunchWorkspaceAppInput,
     FfiConverterTypeListSessionsInput,
     FfiConverterTypeListSessionsOutput,
     FfiConverterTypeMoveCursorInput,

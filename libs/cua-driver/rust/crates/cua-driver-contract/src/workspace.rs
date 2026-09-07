@@ -29,6 +29,18 @@ session_input!(DeleteWorkspaceInput, "delete_workspace");
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, uniffi::Record)]
 #[serde(deny_unknown_fields)]
+pub struct LaunchWorkspaceAppInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// Alias from the trusted workspace_applications configuration.
+    pub app: String,
+}
+impl ToolInput for LaunchWorkspaceAppInput {
+    const TOOL_NAME: &'static str = "launch_workspace_app";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, uniffi::Record)]
+#[serde(deny_unknown_fields)]
 pub struct MoveWindowToWorkspaceInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
@@ -50,6 +62,7 @@ pub struct WorkspaceWindowState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, uniffi::Record)]
 pub struct WorkspaceStateOutput {
+    pub available_apps: Vec<String>,
     pub owned: bool,
     pub space_id: Option<u64>,
     pub space_created: bool,
@@ -71,7 +84,7 @@ fn contract<I: ToolInput>(description: &str, read_only: bool, destructive: bool)
             read_only,
             destructive,
             idempotent: I::TOOL_NAME != "create_workspace",
-            open_world: false,
+            open_world: I::TOOL_NAME == "launch_workspace_app",
         },
         schema_mode: SchemaMode::CanonicalRuntime,
         cursor_semantics: Some(CursorSemantics::new(CursorAction::System)),
@@ -84,6 +97,7 @@ fn contract<I: ToolInput>(description: &str, read_only: bool, destructive: bool)
 pub fn contracts() -> Vec<ToolContract> {
     vec![
         contract::<CreateWorkspaceInput>("Create a session-owned agent Space without selecting it. Trusted configuration may explicitly permit visible Mission Control setup on macOS. Requires a trusted selected-window session. When trusted configuration supplies an existing Space, attach to it and report space_created=false. Private native operations must verify their postconditions; unsupported platforms refuse.", false, false),
+        contract::<LaunchWorkspaceAppInput>("Launch a trusted configured app in a fresh process, approve only its exact initial window, and move it into this session workspace without switching desktops. The app argument is a trusted alias, never a bundle ID, path, URL, or launch arguments. Existing processes and ambiguous windows refuse. Repeated calls return the same session-created window; closed windows require a new session. Unsupported platforms refuse.", false, false),
         contract::<GetWorkspaceStateInput>("Read the current session's workspace ownership and approved window membership. Reports user movement, stale windows and deleted Spaces without capturing a display.", true, false),
         contract::<MoveWindowToWorkspaceInput>("Move an already-approved exact window into this session's workspace and verify membership. Moving never grants access and never switches Spaces.", false, false),
         contract::<RevealWorkspaceInput>("Explicitly switch to this session's workspace. This is the only workspace operation that may switch the user's active Space.", false, false),

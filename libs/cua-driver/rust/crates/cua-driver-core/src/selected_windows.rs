@@ -78,6 +78,22 @@ impl SelectedWindows {
         });
     }
 
+    /// Only the workspace manager may admit a native-attested window from a
+    /// trusted launch recipe. Tool arguments cannot supply this witness.
+    pub(crate) fn admit_launched_window(
+        &self,
+        target: WindowTarget,
+        identity: Arc<dyn WindowIdentity>,
+    ) -> Result<(), String> {
+        identity.validate()?;
+        let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+        if windows.contains_key(&target) {
+            return Err("workspace_launch_conflict: window identity was already used".into());
+        }
+        windows.insert(target, Some(identity));
+        Ok(())
+    }
+
     pub(crate) fn set_workspace(&self, space: Option<u64>) {
         if let Some(workspace) = self.workspace.get() {
             *workspace.space.lock().unwrap_or_else(|e| e.into_inner()) = space;
@@ -148,7 +164,7 @@ impl SelectedWindows {
             }
             "list_windows" | "list_apps" | "start_session" | "get_session" | "end_session"
             | "get_session_state" | "list_sessions" | "wait"
-            | "create_workspace" | "get_workspace_state" | "reveal_workspace" | "release_workspace"
+            | "launch_workspace_app" | "create_workspace" | "get_workspace_state" | "reveal_workspace" | "release_workspace"
             | "restore_workspace_windows" | "delete_workspace" => Ok(()),
             "move_window_to_workspace" => self.native_identity(Self::target(args)?).map(|_| ()),
             "get_window_state" | "click" | "double_click" | "right_click" | "scroll"

@@ -3469,6 +3469,42 @@ class _UniffiFfiConverterTypeInvokeMenuInput(_UniffiConverterRustBuffer):
         _UniffiFfiConverterOptionalString.write(value.session, buf)
 
 @dataclass
+class LaunchWorkspaceAppInput:
+    def __init__(self, *, session:typing.Optional[str], app:str):
+        self.session = session
+        self.app = app
+
+
+
+
+    def __str__(self):
+        return "LaunchWorkspaceAppInput(session={}, app={})".format(self.session, self.app)
+    def __eq__(self, other):
+        if self.session != other.session:
+            return False
+        if self.app != other.app:
+            return False
+        return True
+
+class _UniffiFfiConverterTypeLaunchWorkspaceAppInput(_UniffiConverterRustBuffer):
+    @staticmethod
+    def read(buf):
+        return LaunchWorkspaceAppInput(
+            session=_UniffiFfiConverterOptionalString.read(buf),
+            app=_UniffiFfiConverterString.read(buf),
+        )
+
+    @staticmethod
+    def check_lower(value):
+        _UniffiFfiConverterOptionalString.check_lower(value.session)
+        _UniffiFfiConverterString.check_lower(value.app)
+
+    @staticmethod
+    def write(value, buf):
+        _UniffiFfiConverterOptionalString.write(value.session, buf)
+        _UniffiFfiConverterString.write(value.app, buf)
+
+@dataclass
 class ListSessionsInput:
     def __init__(self, *, limit:typing.Optional[int], cursor:typing.Optional[str]):
         self.limit = limit
@@ -5569,7 +5605,8 @@ class _UniffiFfiConverterSequenceTypeWorkspaceWindowState(_UniffiConverterRustBu
 
 @dataclass
 class WorkspaceStateOutput:
-    def __init__(self, *, owned:bool, space_id:typing.Optional[int], space_created:bool, space_exists:bool, active:bool, private_api:bool, windows:typing.List[WorkspaceWindowState]):
+    def __init__(self, *, available_apps:typing.List[str], owned:bool, space_id:typing.Optional[int], space_created:bool, space_exists:bool, active:bool, private_api:bool, windows:typing.List[WorkspaceWindowState]):
+        self.available_apps = available_apps
         self.owned = owned
         self.space_id = space_id
         self.space_created = space_created
@@ -5582,8 +5619,10 @@ class WorkspaceStateOutput:
 
 
     def __str__(self):
-        return "WorkspaceStateOutput(owned={}, space_id={}, space_created={}, space_exists={}, active={}, private_api={}, windows={})".format(self.owned, self.space_id, self.space_created, self.space_exists, self.active, self.private_api, self.windows)
+        return "WorkspaceStateOutput(available_apps={}, owned={}, space_id={}, space_created={}, space_exists={}, active={}, private_api={}, windows={})".format(self.available_apps, self.owned, self.space_id, self.space_created, self.space_exists, self.active, self.private_api, self.windows)
     def __eq__(self, other):
+        if self.available_apps != other.available_apps:
+            return False
         if self.owned != other.owned:
             return False
         if self.space_id != other.space_id:
@@ -5604,6 +5643,7 @@ class _UniffiFfiConverterTypeWorkspaceStateOutput(_UniffiConverterRustBuffer):
     @staticmethod
     def read(buf):
         return WorkspaceStateOutput(
+            available_apps=_UniffiFfiConverterSequenceString.read(buf),
             owned=_UniffiFfiConverterBoolean.read(buf),
             space_id=_UniffiFfiConverterOptionalUInt64.read(buf),
             space_created=_UniffiFfiConverterBoolean.read(buf),
@@ -5615,6 +5655,7 @@ class _UniffiFfiConverterTypeWorkspaceStateOutput(_UniffiConverterRustBuffer):
 
     @staticmethod
     def check_lower(value):
+        _UniffiFfiConverterSequenceString.check_lower(value.available_apps)
         _UniffiFfiConverterBoolean.check_lower(value.owned)
         _UniffiFfiConverterOptionalUInt64.check_lower(value.space_id)
         _UniffiFfiConverterBoolean.check_lower(value.space_created)
@@ -5625,6 +5666,7 @@ class _UniffiFfiConverterTypeWorkspaceStateOutput(_UniffiConverterRustBuffer):
 
     @staticmethod
     def write(value, buf):
+        _UniffiFfiConverterSequenceString.write(value.available_apps, buf)
         _UniffiFfiConverterBoolean.write(value.owned, buf)
         _UniffiFfiConverterOptionalUInt64.write(value.space_id, buf)
         _UniffiFfiConverterBoolean.write(value.space_created, buf)
@@ -5751,6 +5793,7 @@ __all__ = [
     "GetWorkspaceStateInput",
     "HotkeyInput",
     "InvokeMenuInput",
+    "LaunchWorkspaceAppInput",
     "ListSessionsInput",
     "SessionOutput",
     "ListSessionsOutput",

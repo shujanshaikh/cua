@@ -835,6 +835,19 @@ impl ToolRegistry {
         let Some(tool) = self.tools.get("list_apps") else {
             return;
         };
+        // A platform may attest a fresh process directly when its application
+        // enumeration is cached (notably NSWorkspace after a background launch).
+        if let Ok(Some(identity)) = tool
+            .protected_resource_scope("application_identity", &serde_json::json!({"pid": pid}))
+            .await
+        {
+            for key in ["bundle_id", "launch_path"] {
+                if let Some(value) = identity.get(key).filter(|value| !value.is_null()) {
+                    resource[key] = value.clone();
+                }
+            }
+            return;
+        }
         let result = tool.invoke(serde_json::json!({})).await;
         let Some(app) = result
             .structured_content

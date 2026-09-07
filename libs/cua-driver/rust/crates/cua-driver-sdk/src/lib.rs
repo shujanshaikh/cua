@@ -636,6 +636,7 @@ macro_rules! desktop_tool_methods {
             set_window_frame: SetWindowFrameInput,
             invoke_menu: InvokeMenuInput,
             create_workspace: cua_driver_contract::CreateWorkspaceInput,
+            launch_workspace_app: cua_driver_contract::LaunchWorkspaceAppInput,
             get_workspace_state: cua_driver_contract::GetWorkspaceStateInput,
             move_window_to_workspace: cua_driver_contract::MoveWindowToWorkspaceInput,
             reveal_workspace: cua_driver_contract::RevealWorkspaceInput,
