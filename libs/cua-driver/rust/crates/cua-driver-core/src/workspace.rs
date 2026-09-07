@@ -14,8 +14,18 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorkspaceCreationOptions {
+    /// Trusted host opt-in to briefly showing Mission Control during setup.
+    pub allow_mission_control: bool,
+    pub display_id: Option<u32>,
+}
+
 pub trait WorkspaceBackend: Send + Sync {
     fn create(&self) -> Result<u64, String>;
+    fn create_with_options(&self, _options: WorkspaceCreationOptions) -> Result<u64, String> {
+        self.create()
+    }
     fn state(&self, space: u64) -> Result<(bool, bool), String>;
     fn membership(&self, target: WindowTarget) -> Result<Vec<u64>, String>;
     fn move_window(&self, target: WindowTarget, space: u64) -> Result<(), String>;
@@ -83,7 +93,7 @@ impl Workspaces {
             .iter()
             .map(|(&target, original)| {
                 let current = selection
-                    .validate(target)
+                    .native_identity(target)
                     .and_then(|_| self.backend.membership(target));
                 let (current_space_ids, state) = match current {
                     Err(_) => (vec![], "stale_or_unavailable"),
@@ -130,7 +140,12 @@ impl Workspaces {
                         .and_then(|manifest| manifest.workspace_space_id());
                     let space = match attached {
                         Some(space) => space,
-                        None => self.backend.create()?,
+                        None => self.backend.create_with_options(
+                            context
+                                .capability_manifest()
+                                .map(|m| m.workspace_creation_options())
+                                .unwrap_or_default(),
+                        )?,
                     };
                     if owned.values().any(|workspace| workspace.space == space) {
                         return Err(
@@ -144,6 +159,7 @@ impl Workspaces {
                     }
                     // Retain a successful native allocation even if the following
                     // state query fails, so explicit release remains possible.
+                    selection.set_workspace(Some(space));
                     owned.insert(
                         session.into(),
                         Workspace {
@@ -156,6 +172,8 @@ impl Workspaces {
             }
             "get_workspace_state" => {}
             "release_workspace" => {
+                selection.set_workspace(None);
+                crate::pip_hook::clear_session(session);
                 let released = owned.remove(session);
                 let mut snapshot =
                     self.snapshot(released.as_ref(), selection)
@@ -174,7 +192,7 @@ impl Workspaces {
                 match name {
                     "move_window_to_workspace" => {
                         let target = SelectedWindows::target(args)?;
-                        selection.validate(target)?;
+                        selection.native_identity(target)?;
                         let origin = self.backend.membership(target)?;
                         if origin.len() != 1 {
                             return Err(
@@ -183,9 +201,9 @@ impl Workspaces {
                             );
                         }
                         workspace.moved.entry(target).or_insert(origin);
-                        selection.validate(target)?;
+                        selection.native_identity(target)?;
                         self.backend.move_window(target, workspace.space)?;
-                        selection.validate(target)?;
+                        selection.native_identity(target)?;
                         if self.backend.membership(target)? != [workspace.space] {
                             return Err(
                                 "workspace_move_incomplete: destination membership did not verify"
@@ -198,7 +216,7 @@ impl Workspaces {
                         let mut failures = Vec::new();
                         for (&target, origin) in &workspace.moved {
                             let outcome = (|| {
-                                selection.validate(target)?;
+                                selection.native_identity(target)?;
                                 let current = self.backend.membership(target)?;
                                 if &current == origin {
                                     return Ok(());
@@ -231,6 +249,8 @@ impl Workspaces {
                             return Err("workspace_delete_incomplete: Space still exists".into());
                         }
                         snapshot.owned = false;
+                        selection.set_workspace(None);
+                        crate::pip_hook::clear_session(session);
                         owned.remove(session);
                         return Ok(snapshot);
                     }
@@ -272,7 +292,13 @@ impl Tool for WorkspaceTool {
         if let Err(error) = checked {
             return error;
         }
-        match self.workspaces.execute(&self.def.name, &args) {
+        let workspaces = self.workspaces.clone();
+        let name = self.def.name.clone();
+        let outcome = crate::tool::spawn_blocking_with_authorization(move || {
+            workspaces.execute(&name, &args)
+        })
+        .await;
+        match outcome.unwrap_or_else(|error| Err(format!("workspace_worker_failed: {error}"))) {
             Ok(state) => ToolResult::text("Workspace state verified.").with_structured(serde_json::to_value(state).expect("workspace state serializes")),
             Err(message) => ToolResult::error(message.clone()).with_structured(json!({"code":message.split(':').next().unwrap_or("workspace_failed"), "message":message})),
         }
@@ -387,7 +413,7 @@ mod tests {
     ) -> Arc<EffectiveAuthorizationContext> {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), serde_json::to_vec(&json!({
-            "version":3,"resources":{"desktop":{"selected_windows_only":true,"windows":windows,"workspace_space_id":100}},
+            "version":3,"resources":{"desktop":{"selected_windows_only":true,"workspace_only":true,"windows":windows,"workspace_space_id":100}},
             "allow":{"tools":["create_workspace","get_workspace_state","move_window_to_workspace","reveal_workspace","restore_workspace_windows","release_workspace","delete_workspace","end_session","list_windows"]}
         })).unwrap()).unwrap();
         let manifest = Arc::new(crate::session_manifest::load_manifest(file.path()).unwrap());
@@ -443,6 +469,12 @@ mod tests {
         tools.register_session_tools();
         tools.bind_selected_windows(&selected).unwrap();
         tools.bind_selected_windows(&other).unwrap();
+        assert!(selected
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(a)
+            .is_err());
         let call = |name: &'static str, args: Value| {
             tools.invoke_with_context(name, args, selected.clone())
         };
@@ -492,6 +524,24 @@ mod tests {
             Some(true)
         );
         native.membership.lock().unwrap().insert(a, vec![9]); // Simulated user move.
+        assert!(selected
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(a)
+            .is_err());
+        selected
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .native_identity(a)
+            .unwrap();
+        selected
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(b)
+            .unwrap();
         assert_eq!(
             call("restore_workspace_windows", json!({"session":"selected"}))
                 .await
@@ -510,6 +560,12 @@ mod tests {
             .store(false, std::sync::atomic::Ordering::SeqCst);
         let released = call("release_workspace", json!({"session":"selected"})).await;
         assert_eq!(released.structured_content.unwrap()["owned"], false);
+        assert!(selected
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .validate(b)
+            .is_err());
         assert_eq!(native.membership(a).unwrap(), vec![9]);
         assert_ne!(
             call("create_workspace", json!({"session":"selected"}))

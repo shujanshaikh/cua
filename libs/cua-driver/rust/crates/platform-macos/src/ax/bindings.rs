@@ -82,6 +82,7 @@ extern "C" {
         timeout_in_seconds: f32,
     ) -> AXError;
     pub fn AXUIElementGetTypeID() -> CFTypeID;
+    pub fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> AXError;
     pub fn AXIsProcessTrusted() -> bool;
     /// `AXIsProcessTrustedWithOptions(options)` — when called with
     /// `{kAXTrustedCheckOptionPrompt: true}` raises the system Accessibility
@@ -693,6 +694,28 @@ pub unsafe fn ax_get_window_id(element: AXUIElementRef) -> Option<u32> {
 ///
 /// `element` must be valid, and the caller must release every returned element.
 pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
+    let mut windows = copy_ax_windows_raw(element);
+    let mut pid = 0;
+    if AXUIElementGetPid(element, &mut pid) == kAXErrorSuccess {
+        for retained in crate::selected_windows::copy_retained_windows(pid) {
+            if windows
+                .iter()
+                .any(|&window| core_foundation::base::CFEqual(window.cast(), retained.cast()) != 0)
+            {
+                CFRelease(retained.cast());
+            } else {
+                windows.push(retained);
+            }
+        }
+    }
+    windows
+}
+
+/// Unaugmented public AX enumeration, used only when binding a new identity.
+///
+/// # Safety
+/// The application must be live; release every returned element.
+pub unsafe fn copy_ax_windows_raw(element: AXUIElementRef) -> Vec<AXUIElementRef> {
     let attr = CFStr::new("AXWindows");
     let mut value: CFTypeRef = std::ptr::null();
     let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value);

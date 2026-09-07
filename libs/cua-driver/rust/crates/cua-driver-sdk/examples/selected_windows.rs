@@ -69,6 +69,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let selected: Vec<_> = windows.iter().take(2).cloned().collect();
     let mut manifest = json!({"version":3,"resources":{"desktop":{"selected_windows_only":true,"windows":selected}},"allow":{"tools":["list_windows","list_apps","get_window_state","click","set_value","type_text","press_key","get_browser_state","browser_prepare","create_workspace","get_workspace_state","move_window_to_workspace","reveal_workspace","release_workspace","restore_workspace_windows","delete_workspace","end_session","start_session","get_session","get_desktop_state","start_recording","stop_recording","get_recording_state"]}});
     manifest["resources"]["files"] = json!({"write":[{"dir":evidence,"recursive":true}]});
+    let workspace_display = std::env::var("CUA_WORKSPACE_DISPLAY_ID")
+        .ok()
+        .map(|value| value.parse::<u32>())
+        .transpose()?;
+    if let Some(display) = workspace_display {
+        manifest["resources"]["desktop"]["workspace_only"] = json!(true);
+        manifest["resources"]["desktop"]["workspace_allow_mission_control"] = json!(true);
+        manifest["resources"]["desktop"]["workspace_display_id"] = json!(display);
+    }
     // JSON is valid YAML; the existing trusted manifest loader owns parsing.
     std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
     let driver = CuaDriver::create_configured(ConfiguredDriverOptions {
@@ -91,6 +100,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         capability_manifest_path: Some(manifest_path),
         bounded_manifest_path: None,
     })?;
+    if workspace_display.is_some() {
+        assert!(
+            session
+                .call_tool("get_window_state".into(), windows[0].to_string())
+                .await?
+                .is_error
+        );
+        let created = session
+            .create_workspace(cua_driver_contract::CreateWorkspaceInput { session: None })
+            .await?;
+        std::fs::write(
+            format!("{evidence}/workspace-create.json"),
+            &created.raw_json,
+        )?;
+        assert!(!created.is_error, "{}", created.text);
+        assert_eq!(structured(&created)["space_created"], true);
+        assert_eq!(structured(&created)["active"], false);
+        for window in windows.iter().take(2) {
+            let moved = session
+                .call_tool("move_window_to_workspace".into(), window.to_string())
+                .await?;
+            assert!(!moved.is_error, "{}", moved.text);
+            assert_eq!(structured(&moved)["active"], false);
+        }
+        println!("workspace_created_and_two_windows_moved_without_switch=true");
+    }
     let frames = Arc::new(AtomicUsize::new(0));
     let closed = Arc::new(AtomicUsize::new(0));
     session.attach_experimental_preview(Box::new(PreviewProbe {
@@ -98,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         closed: closed.clone(),
     }))?;
     let other_manifest = format!("{evidence}/other.yaml");
-    manifest["resources"]["desktop"]["windows"] = json!([windows[2]]);
+    manifest["resources"]["desktop"] = json!({"selected_windows_only":true,"windows":[windows[2]]});
     std::fs::write(&other_manifest, serde_json::to_vec(&manifest)?)?;
     let other = driver.create_trusted_session(TrustedSessionOptions {
         public_session: "other-fixture".into(),
@@ -136,6 +171,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             assert!(result.images.is_empty());
         } else {
             assert!(!result.is_error, "{}", result.text);
+            assert!(
+                !result.images.is_empty(),
+                "approved fixture must have a fresh exact-window image"
+            );
         }
     }
     let desktop = session
@@ -179,6 +218,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .call_tool("get_window_state".into(), window.to_string())
             .await?;
         assert!(!state.is_error, "{}", state.text);
+        let image_before = state
+            .images
+            .first()
+            .expect("fresh before image")
+            .data_base64
+            .clone();
         let state = structured(&state);
         // Interleave a different session's observation of a sibling in the
         // same process. Its element cache must not replace this snapshot.
@@ -218,6 +263,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
         assert!(!after.is_error, "{}", after.text);
         assert_eq!(text_field(&structured(&after))["value"], value);
+        assert_ne!(
+            after.images.first().expect("fresh after image").data_base64,
+            image_before,
+            "image must reflect the changed fixture text"
+        );
+        println!("window_{index}_fresh_frame_changed_after_ax_write=true");
     }
     let sibling = other
         .call_tool("get_window_state".into(), windows[2].to_string())
@@ -247,7 +298,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         frames.load(Ordering::SeqCst) >= 2,
         "approved actions push existing preview frames"
     );
-    let frame_count = frames.load(Ordering::SeqCst);
     let stopped = session
         .call_tool("stop_recording".into(), "{}".into())
         .await?;
@@ -308,6 +358,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         recorded_windows.len()
     );
     println!("recording_and_preview_session_scoped=true");
+    if workspace_display.is_some() {
+        #[cfg(target_os = "macos")]
+        if std::env::var_os("CUA_WORKSPACE_REVEAL").is_some() {
+            use cua_driver_core::workspace::WorkspaceBackend;
+            let state = session
+                .get_workspace_state(cua_driver_contract::GetWorkspaceStateInput { session: None })
+                .await?;
+            let original = structured(&state)["windows"][0]["original_space_ids"][0]
+                .as_u64()
+                .unwrap();
+            let revealed = session
+                .reveal_workspace(cua_driver_contract::RevealWorkspaceInput { session: None })
+                .await?;
+            assert!(!revealed.is_error, "{}", revealed.text);
+            assert_eq!(structured(&revealed)["active"], true);
+            platform_macos::spaces::MacosWorkspaces.reveal(original)?;
+            println!("explicit_reveal_verified_and_original_desktop_restored=true");
+        }
+        let restored = session
+            .call_tool("restore_workspace_windows".into(), "{}".into())
+            .await?;
+        assert!(!restored.is_error, "{}", restored.text);
+        assert!(
+            session
+                .call_tool("get_window_state".into(), windows[0].to_string())
+                .await?
+                .is_error
+        );
+        for window in windows.iter().take(2) {
+            let moved = session
+                .call_tool("move_window_to_workspace".into(), window.to_string())
+                .await?;
+            assert!(!moved.is_error, "{}", moved.text);
+        }
+        println!("workspace_restoration_revokes_observation_until_verified_return=true");
+    }
     let oracle_path = format!("{report_path}.state.json");
     if std::path::Path::new(&oracle_path).exists() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -353,6 +439,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "create_error={} code={:?}",
         create.is_error, create.error_code
     );
+    if workspace_display.is_some() && std::env::var_os("CUA_WORKSPACE_CLEANUP").is_some() {
+        // The closed second fixture can make restoration partially fail. The
+        // manager still restores live windows and deletion independently proves emptiness.
+        let restored = session
+            .call_tool("restore_workspace_windows".into(), "{}".into())
+            .await?;
+        std::fs::write(format!("{evidence}/final-restore.json"), &restored.raw_json)?;
+        let deleted = session
+            .call_tool("delete_workspace".into(), "{}".into())
+            .await?;
+        std::fs::write(
+            format!("{evidence}/workspace-delete.json"),
+            &deleted.raw_json,
+        )?;
+        assert!(!deleted.is_error, "{}", deleted.text);
+        assert_eq!(structured(&deleted)["space_exists"], false);
+        println!("explicit_empty_desktop_cleanup_verified=true");
+    }
+    let frame_count = frames.load(Ordering::SeqCst);
     let ended = session.call_tool("end_session".into(), "{}".into()).await?;
     assert!(!ended.is_error, "{}", ended.text);
     assert!(

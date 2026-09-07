@@ -246,7 +246,7 @@ async fn decide_background_window_action(
     use cua_driver_core::background_input::{
         decide_background_input, BackgroundInputDecision, ExactWindowTarget,
     };
-    let facts = match tokio::task::spawn_blocking(move || {
+    let facts = match cua_driver_core::tool::spawn_blocking_with_authorization(move || {
         crate::ax::exact_target::gather_background_facts(pid, window_id, element_ptr)
     })
     .await
@@ -444,7 +444,7 @@ async fn pixel_focus_landed(pid: i32, window_id: Option<u32>, x: f64, y: f64) ->
     let Some(wid) = window_id else {
         return false;
     };
-    tokio::task::spawn_blocking(move || {
+    cua_driver_core::tool::spawn_blocking_with_authorization(move || {
         let Ok(frame) = px_frame::resolve_window_px_frame(wid) else {
             return false;
         };
@@ -614,7 +614,7 @@ pub fn load_driver_config() -> DriverConfig {
 /// used by CoreGraphics input APIs. Retina scaled modes cannot rely on the
 /// nominal backing factor alone, so derive the ratio from the actual PNG.
 pub async fn desktop_screenshot_point(x: f64, y: f64) -> (f64, f64) {
-    let ratio = tokio::task::spawn_blocking(|| {
+    let ratio = cua_driver_core::tool::spawn_blocking_with_authorization(|| {
         let logical_w = get_screen_size::main_screen_size().map(|(w, _, _)| w as f64);
         let shot_w = crate::capture::screenshot_display_bytes()
             .ok()

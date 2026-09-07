@@ -192,7 +192,7 @@ impl Tool for GetWindowStateTool {
         // `com.apple.appkit.xpc.openAndSavePanelService`, so the owner-mismatch
         // shape is routine, and the caller must be told the real owner pid.
         {
-            let owner = match tokio::task::spawn_blocking(move || {
+            let owner = match cua_driver_core::tool::spawn_blocking_with_authorization(move || {
                 crate::windows::resolve_window_owner(pid, window_id)
             })
             .await
@@ -300,7 +300,7 @@ impl Tool for GetWindowStateTool {
             // dropping a spawn_blocking JoinHandle cannot cancel a blocked AX call.
             let selected_window =
                 cua_driver_core::tool::current_selected_observation_scope().map(|_| window_id);
-            let walk_future = tokio::task::spawn_blocking(move || {
+            let walk_future = cua_driver_core::tool::spawn_blocking_with_authorization(move || {
                 crate::ax::tree::with_selected_window(selected_window, || {
                     crate::ax::tree::walk_tree_bounded(
                         pid,
@@ -373,7 +373,7 @@ impl Tool for GetWindowStateTool {
         let screenshot = if should_capture {
             let out_file = screenshot_out_file.clone();
             let capture_context = cua_driver_core::tool::current_dispatch_authorization_context();
-            let res = tokio::task::spawn_blocking(move || -> Result<
+            let res = cua_driver_core::tool::spawn_blocking_with_authorization(move || -> Result<
                 (
                     Option<String>,
                     Option<String>,
@@ -672,7 +672,7 @@ impl Tool for GetWindowStateTool {
         // not a promise. Old consumers ignore the extra field.
         {
             let capture_available = screenshot_dims.is_some();
-            let report = tokio::task::spawn_blocking(move || {
+            let report = cua_driver_core::tool::spawn_blocking_with_authorization(move || {
                 let facts = crate::ax::exact_target::gather_background_facts(pid, window_id, None);
                 cua_driver_core::background_input::background_input_capability_report(
                     cua_driver_core::background_input::ExactWindowTarget { pid, window_id },

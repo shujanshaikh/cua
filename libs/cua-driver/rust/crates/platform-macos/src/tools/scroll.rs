@@ -148,7 +148,7 @@ impl Tool for ScrollTool {
                 ScrollDirection::Left => (0, step),
             };
             let (x, y) = super::desktop_screenshot_point(x, y).await;
-            let result = tokio::task::spawn_blocking(move || {
+            let result = cua_driver_core::tool::spawn_blocking_with_authorization(move || {
                 crate::input::mouse::scroll_wheel_desktop(x, y, delta_y, delta_x, amount)
             })
             .await;
@@ -275,7 +275,7 @@ impl Tool for ScrollTool {
                 let by_for_ax = by.clone();
                 let foreground = delivery_mode.is_foreground();
                 let ax_result =
-                    tokio::task::spawn_blocking(move || -> anyhow::Result<(bool, bool)> {
+                    cua_driver_core::tool::spawn_blocking_with_authorization(move || -> anyhow::Result<(bool, bool)> {
                         let Some(element_guard) = native_element_guard else {
                             return Ok((false, false));
                         };
@@ -407,7 +407,7 @@ impl Tool for ScrollTool {
             // coordinates and window bounds are logical top-left points, so no
             // Retina scaling is needed here.
             let wid = window_id;
-            let target_task = tokio::task::spawn_blocking(move || {
+            let target_task = cua_driver_core::tool::spawn_blocking_with_authorization(move || {
                 // Web content can be present in AX while its frame is below
                 // the outer page viewport. Ask the accessibility hierarchy to
                 // reveal the target before taking the screen-space center;
@@ -559,7 +559,7 @@ impl Tool for ScrollTool {
                 prior_front,
                 "scroll.CGScrollWheel",
                 || async move {
-                    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                    cua_driver_core::tool::spawn_blocking_with_authorization(move || -> anyhow::Result<()> {
                         let do_it = move || -> anyhow::Result<()> {
                             crate::input::mouse::scroll_wheel_at_xy(
                                 pid,
@@ -670,14 +670,14 @@ impl Tool for ScrollTool {
                 // Pre-focus the element under suppression so its
                 // side-effects are captured by the snapshot + lease.
                 if let Some(element_ptr) = pre_focus_ptr {
-                    let _ = tokio::task::spawn_blocking(move || {
+                    let _ = cua_driver_core::tool::spawn_blocking_with_authorization(move || {
                         crate::input::ax_actions::focus_element(element_ptr)
                     })
                     .await;
                     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                 }
 
-                tokio::task::spawn_blocking(move || {
+                cua_driver_core::tool::spawn_blocking_with_authorization(move || {
                     for _ in 0..amount {
                         crate::input::keyboard::press_key(pid, &key, &[])?;
                         std::thread::sleep(std::time::Duration::from_millis(50));

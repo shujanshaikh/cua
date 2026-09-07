@@ -10,6 +10,12 @@ use core_foundation::{
 };
 use serde_json::Value;
 use std::ffi::c_void;
+mod mission_control;
+
+/// Explicitly authorized, visible Mission Control setup. Never a background fallback.
+pub fn create_with_mission_control(display: Option<u32>) -> Result<u64, String> {
+    mission_control::create(display)
+}
 
 unsafe fn symbol<T: Copy>(name: &[u8]) -> Result<T, String> {
     crate::input::skylight::find_sym(name)
@@ -133,7 +139,7 @@ fn wait_for_membership(
     window_id: u32,
     predicate: impl Fn(&[u64]) -> bool,
 ) -> Result<Vec<u64>, String> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
         let observed = membership(window_id)?;
         if predicate(&observed) || std::time::Instant::now() >= deadline {
@@ -141,6 +147,45 @@ fn wait_for_membership(
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
+}
+
+/// Tahoe's bridged operation is callable without a Dock scripting addition.
+/// Based on yabai's space_manager_move_window_to_space (asmvik, MIT):
+/// https://github.com/asmvik/yabai/commit/dd845723416f5fe92af49fad5ebab00369e07edd
+/// Submission is asynchronous; callers must verify actual membership.
+fn bridged_move(window_id: u32, target: u64) -> Result<bool, String> {
+    use objc2::{
+        msg_send,
+        runtime::{AnyClass, AnyObject},
+        sel,
+    };
+    type Perform = unsafe extern "C" fn(*mut c_void) -> i64;
+    let Some(pointer) = crate::input::skylight::bridged_window_management_operation() else {
+        return Ok(false);
+    };
+    let perform: Perform = unsafe { std::mem::transmute(pointer) };
+    let Some(class) = AnyClass::get("SLSBridgedMoveWindowsToManagedSpaceOperation") else {
+        return Ok(false);
+    };
+    if class
+        .instance_method(sel!(initWithWindows:spaceID:))
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let windows = CFArray::from_CFTypes(&[CFNumber::from(window_id as i32)]);
+    unsafe {
+        let allocated: *mut AnyObject = msg_send![class, alloc];
+        let operation: *mut AnyObject = msg_send![allocated, initWithWindows: windows.as_concrete_TypeRef() as *const AnyObject, spaceID: target];
+        if operation.is_null() {
+            return Err(
+                "workspace_operation_unsupported: bridged movement allocation failed".into(),
+            );
+        }
+        let _submission = perform(operation.cast());
+        let _: () = msg_send![operation, release];
+    }
+    Ok(true)
 }
 
 /// Adapted from #2429 by Francesco Bonacci and injaneity. Add before removing
@@ -159,6 +204,13 @@ pub fn move_window(window_id: u32, target: u64) -> Result<Vec<u64>, String> {
         return Err(
             "workspace_operation_unsupported: ambiguous or sticky window membership".into(),
         );
+    }
+    if bridged_move(window_id, target)? {
+        if wait_for_membership(window_id, |ids| ids == [target])? == [target] {
+            return Ok(old);
+        }
+        // Do not race an outstanding asynchronous operation with another move.
+        return Err("workspace_move_incomplete: bridged movement did not establish destination membership before the deadline".into());
     }
     type ManagedMove = unsafe extern "C" fn(u32, *const c_void, u64);
     let windows = CFArray::from_CFTypes(&[CFNumber::from(i64::from(window_id))]);
@@ -208,6 +260,16 @@ pub fn move_window(window_id: u32, target: u64) -> Result<Vec<u64>, String> {
 /// The shared manager owns session state; this adapter owns only native calls.
 pub struct MacosWorkspaces;
 impl cua_driver_core::workspace::WorkspaceBackend for MacosWorkspaces {
+    fn create_with_options(
+        &self,
+        options: cua_driver_core::workspace::WorkspaceCreationOptions,
+    ) -> Result<u64, String> {
+        if options.allow_mission_control {
+            create_with_mission_control(options.display_id)
+        } else {
+            self.create()
+        }
+    }
     fn create(&self) -> Result<u64, String> {
         create()
     }
@@ -278,40 +340,10 @@ impl cua_driver_core::workspace::WorkspaceBackend for MacosWorkspaces {
         }
         Ok(())
     }
+    fn delete(&self, space: u64) -> Result<(), String> {
+        mission_control::delete(space)
+    }
     fn reveal(&self, space: u64) -> Result<(), String> {
-        type Reveal = unsafe extern "C" fn(u32, *const c_void, u64);
-        let displays = managed_displays()?;
-        let display = displays
-            .as_array()
-            .ok_or("workspace_state_unavailable")?
-            .iter()
-            .find(|display| contains_space(&Value::Array(vec![(*display).clone()]), space))
-            .ok_or("workspace_space_deleted")?;
-        let display_id = CFString::new(
-            display
-                .get("Display Identifier")
-                .and_then(Value::as_str)
-                .ok_or("workspace_display_unavailable")?,
-        );
-        let reveal: Reveal = unsafe { symbol(b"SLSManagedDisplaySetCurrentSpace\0")? };
-        unsafe {
-            reveal(
-                connection()?,
-                display_id.as_concrete_TypeRef().cast(),
-                space,
-            );
-        }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-        loop {
-            if self.state(space)?.1 {
-                return Ok(());
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(
-                    "workspace_operation_unsupported: explicit Space switch did not verify".into(),
-                );
-            }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
+        mission_control::reveal(space)
     }
 }

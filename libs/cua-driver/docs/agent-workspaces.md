@@ -2,7 +2,7 @@
 
 This branch adds driver tools and trusted selected-window sessions. It uses the existing Rust SDK, v3 capability manifest, native background input, ScreenCaptureKit, trajectory recorder, and experimental PiP renderer. There is no new application or permission picker.
 
-**Automatic macOS Space creation and movement did not work in the tested environment.** The implementation attempts private SkyLight operations and verifies membership; it returns `workspace_operation_unsupported` when they do not work. Attaching to a host-specified existing Space is a fallback, not evidence of automatic management. See [test evidence](agent-workspaces-evidence.md) for the tested conditions and outstanding gates.
+**Automatic creation and movement work on the tested SIP-enabled macOS 26.5 host.** Creation briefly opens Mission Control and presses its existing Add Desktop button. Movement uses the macOS 26 SkyLight bridged operation and verifies actual membership without switching desktops. The trusted host must opt into visible setup. Older or incompatible macOS versions return explicit unsupported results. See [test evidence](agent-workspaces-evidence.md) for scope and outstanding gates.
 
 The changes live in the requesting user's fork. No upstream PR is part of delivery. Native movement code was adapted from [trycua/cua#2429](https://github.com/trycua/cua/pull/2429), with credit to Francesco Bonacci and injaneity preserved in the implementation commit.
 
@@ -15,10 +15,14 @@ version: 3
 resources:
   desktop:
     selected_windows_only: true
+    workspace_only: true
+    workspace_allow_mission_control: true
+    # Optional numeric CGDirectDisplayID; defaults to the main display:
+    # workspace_display_id: 1
     windows:
       - {pid: 12345, window_id: 67890}
       - {pid: 12345, window_id: 67891}
-    # Optional trusted fallback, obtained from native Space discovery:
+    # To attach an existing desktop instead, omit the two creation options above:
     # workspace_space_id: 100
   files:
     write:
@@ -45,9 +49,9 @@ allow:
     - end_session
 ```
 
-Use real, currently live IDs. `selected_windows_only` and `workspace_space_id` require v3. An empty selection permits no windows. A Space ID alone does not grant window access. Existing tool and protected-resource authorization still apply; selection further narrows them.
+Use real, currently live IDs. `selected_windows_only` and `workspace_space_id` require v3. An empty selection permits no windows. A Space ID alone does not grant window access. With `workspace_only: true`, observation and input require both an approved lifetime identity and current membership in the owned desktop. Before creation, after release, after Space deletion, or while the user moves a window elsewhere, access is denied. Exact approved windows can still be moved or restored through workspace tools. New arrivals receive no automatic approval. Existing tool and protected-resource authorization still apply; selection further narrows them.
 
-On macOS, binding requires Accessibility permission, an exact top-level AX window, its retained remote AX object, WindowServer ownership, and the process start time. No title/geometry match authorizes a window. Failure to re-prove this witness permanently invalidates that selection entry. Process or window ID reuse does not rebind an invalidated entry. Applications with unreliable AX lifetime identity are refused; this is not a sandbox against a malicious application falsifying its own accessibility data.
+On macOS, binding requires Accessibility permission, an exact top-level AX window, its retained remote AX object, WindowServer ownership, and the process start time. No title/geometry match authorizes a window. The driver retains the exact AX object across movement and carries session authority into native workers. Binding an already inactive window can use serialized, bounded private AX token recovery; unresolved targets remain refused. Failure to re-prove this witness permanently invalidates that selection entry. Process or window ID reuse does not rebind an invalidated entry. Applications with unreliable AX lifetime identity are refused; this is not a sandbox against a malicious application falsifying its own accessibility data.
 
 The selection is immutable. For replacement, close the old trusted session and create a new one with a fresh manifest and native lifetime witnesses. Editing the loaded file or restarting an agent-callable session does not widen its authority. Handle close revokes the connection immediately; existing lifecycle hooks clear observations and ownership after any admitted work drains. Expired authority refuses dispatch/capture immediately, and the existing runtime maintenance sweep reclaims expired session resources (up to 30 seconds).
 
@@ -104,21 +108,21 @@ Desktop capture/input, foreground delivery, app launching/termination, clipboard
 
 ## Workspace lifecycle
 
-| Operation | Behavior |
-| --- | --- |
-| `create_workspace` | Attempt automatic creation, or attach the Space supplied by trusted configuration. Report whether the session created it. Refuse duplicate ownership within the runtime. |
-| `get_workspace_state` | Re-query native Space existence, activation and tracked window memberships. Report stale windows, deleted Spaces and later user movement. |
-| `move_window_to_workspace` | Require an existing window grant, preserve its first origin, attempt movement and verify the exact destination membership. Keep origin tracking after partial failure. |
-| `reveal_workspace` | Explicit native switch with a fresh activation check; unsupported/no-op calls fail. |
-| `restore_workspace_windows` | Explicitly restore independent tracked windows. Do not override later user placement. Aggregate failures while completing independent restorations. Query state after a partial failure. |
-| `release_workspace` | Drop ownership, leaving windows and Spaces in place. Access approval remains separate. Ownership is released even if the final native state read fails. |
-| `delete_workspace` | Refuse deletion of pre-existing Spaces. Safe deletion of created Spaces is currently unsupported by the macOS adapter. |
+`create_workspace` creates and owns one ordinary Mission Control desktop, or attaches the exact trusted `workspace_space_id`. Repeated creation returns the owned state. The runtime prevents its sessions from owning the same desktop. Ownership is local to a driver runtime, not a macOS-wide reservation against other driver processes.
 
-Session end/disconnect releases workspace ownership without moving windows, closing apps, or deleting Spaces. Release does not schedule later deletion. Display topology and membership are read afresh. Fullscreen, sticky/multiple-Space membership and unknown topology are refused for movement. Native state can change concurrently with a user action; postconditions report the observed result rather than attempting a corrective switch.
+`workspace_allow_mission_control: true` is trusted v3 configuration. It permits visible setup, not foreground input. The agent cannot enable it through tool arguments. The driver uses public Accessibility AXPress against private Dock identifiers and a private CoreDock notification. It refuses setup if Mission Control is already open, display mapping is unavailable, or the native result is ambiguous. Creation is not silent: pause ordinary user interaction during this brief setup.
 
-macOS Space operations use private SkyLight APIs through the existing loader. Accessibility and ScreenCaptureKit are public Apple APIs; exact AX/WindowServer integration also reuses existing private helpers. Public AppKit [window collection behavior](https://developer.apple.com/documentation/appkit/nswindow/collectionbehavior-swift.struct/canjoinallspaces) does not provide arbitrary third-party Space management. Private signatures were checked against [CGSInternal](https://github.com/NUIKit/CGSInternal/blob/master/CGSSpace.h); symbol presence is not a capability check. No SIP change, TCC database editing, process injection or Dock scripting addition is used.
+Window movement uses private `SLSBridgedMoveWindowsToManagedSpaceOperation` on compatible macOS 26 systems. The submit function is a local C++ SkyLight symbol, resolved read-only in the driver's own loaded image. No Dock injection, scripting addition, SIP change, TCC database modification, or system-setting change is involved. Legacy private movement is attempted only when the newer route is absent, never after an asynchronous submission. Every route requires fresh exact membership verification. A two-second timeout reports an incomplete operation; query state before retrying.
 
-Windows and Linux expose the shared workspace contract but explicitly refuse native workspace operations and selected-window lifetime binding. Their native implementations are not provided by this branch.
+State reports created versus attached ownership, existence, active status, original placement and current membership. Movement records the original Space before native mutation so partial failures remain inspectable. Fullscreen and sticky/multiple-membership windows refuse automatic movement. Removed displays and deleted Spaces invalidate state or access; the driver does not recreate them silently.
+
+Only `reveal_workspace` selects the workspace, through a verified Mission Control AX action. Background capture, input, movement and restoration never invoke it. `restore_workspace_windows` restores recorded membership explicitly and refuses to overwrite a later user placement. It restores Space membership, not an earlier cross-display frame geometry. Cross-display capture is not certified; keep the workspace on the target windows' display.
+
+`release_workspace` and session teardown release ownership without deleting a desktop or closing an app. Window approval remains independent; workspace-only sessions lose observation/input access when ownership ends. `delete_workspace` explicitly removes only an empty, inactive ordinary desktop created by this session. It refuses attached desktops, the last desktop on a display, and any desktop containing windows. Deletion briefly shows Mission Control and verifies absence afterward. Concurrent external window movement or Dock changes cannot be made transactional through these private APIs; ambiguous outcomes are reported rather than destructively rolled back.
+
+Native source attribution and MIT notices for yabai, Hammerspoon and Paneru are in [THIRD_PARTY_NOTICES.md](../rust/crates/platform-macos/THIRD_PARTY_NOTICES.md), in addition to the preserved Cua #2429 contributor credit.
+
+Windows and Linux retain the common contract and explicitly refuse native workspace operations and selected-window lifetime binding. Native adapters for them are not implemented here.
 
 ## Existing recording and preview
 
@@ -134,7 +138,7 @@ let backend = pip_preview::start_pip(&existing_experimental_pip_config)?;
 session.attach_experimental_preview(backend)?;
 ```
 
-These are exact-window captures, never a capture of an inactive Space. Inactive-window support depends on live exact AX resolution and ScreenCaptureKit availability. Visible PiP, child/dialog rendering and background input on an inactive Space remain unverified here.
+These are exact-window captures, never a capture of an inactive Space. Inactive-window support depends on live exact AX resolution and ScreenCaptureKit availability. Inactive-desktop exact-window screenshots and AX text edits passed the AppKit fixture. Screenshots changed after text writes, and recording contained only approved windows. Visible PiP rendering and child/dialog behavior still require their native matrix; the test backend verifies frame routing and shutdown. Minimized capture is refused. This is not universal background keyboard support: same-process keyboard ambiguity remains refused.
 
 ## Development setup
 
@@ -153,6 +157,15 @@ cargo build --locked -p cua-driver-sdk --example selected_windows
 
 Sign the isolated fixture bundle and example executables using the existing development identity before native execution. Launch the fixture directly with `CUA_HARNESS_WORKSPACE_REPORT=/private/tmp/cua-workspace-fixture.json`, `CUA_HARNESS_WORKSPACE_SECONDS=900`, and optionally `CUA_HARNESS_WORKSPACE_SCREEN=last`. This fixture mode creates three windows without activation and terminates only its own process on timeout.
 
-Run `target/debug/examples/selected_windows /private/tmp/cua-workspace-fixture.json /private/tmp/cua-workspace-evidence`. Its oracle-enabled run minimizes the first fixture window and closes the second; use fresh fixtures for each run. `workspace_probe --create --fixture-report <report> --move-to <ordinary-space-id>` tests automatic management only on the verified repository fixture. It prints sanitized Space metadata without application titles.
+Run `target/debug/examples/selected_windows /private/tmp/cua-workspace-fixture.json /private/tmp/cua-workspace-evidence`. Its oracle-enabled run minimizes the first fixture window and closes the second; use fresh fixtures for each run. `workspace_probe --mission-control-create --display <CGDirectDisplayID>` tests visible creation. `workspace_probe --fixture-report <report> --move-to <ordinary-space-id>` moves only the verified repository fixture. `--create` retains the older non-visible private-call diagnostic. It prints sanitized Space metadata without application titles.
+
+For the full SDK workspace diagnostic, use a fresh fixture and an empty evidence directory:
+
+```sh
+CUA_WORKSPACE_DISPLAY_ID=1 CUA_WORKSPACE_REVEAL=1 CUA_WORKSPACE_CLEANUP=1 \
+  target/debug/examples/selected_windows /private/tmp/cua-workspace-fixture.json /private/tmp/cua-workspace-evidence
+```
+
+Replace display 1 with the fixture's actual display. This opt-in run briefly shows Mission Control, explicitly reveals the created desktop and returns to the saved original desktop, restores surviving windows and explicitly deletes its empty created desktop. Omit `CUA_WORKSPACE_REVEAL` for background-only tests after setup; omit `CUA_WORKSPACE_CLEANUP` to retain the desktop. No daily installation is replaced.
 
 Regenerate interfaces with `cargo run --locked -p cua-driver-contract --bin cua-contract-gen -- all` and `node ../scripts/generate-uniffi-bindings.mjs`. Do not edit generated bindings manually. The canonical macOS gate remains `libs/cua-driver/tests/runners/macos-lume/run-all.sh --standalone-browser`; local fixture tests do not replace it. This task's host-only environment has no Lume installation, so that gate is outstanding.

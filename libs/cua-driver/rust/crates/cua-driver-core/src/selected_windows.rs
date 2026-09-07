@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -14,7 +14,7 @@ pub struct WindowTarget {
 }
 
 /// An owned native lifetime witness, not a repeated numeric ID lookup.
-pub trait WindowIdentity: Send + Sync {
+pub trait WindowIdentity: Send + Sync + std::any::Any {
     fn validate(&self) -> Result<(), String>;
 }
 
@@ -22,7 +22,13 @@ pub trait WindowSelectionBackend: Send + Sync {
     fn bind(&self, target: WindowTarget) -> Result<Arc<dyn WindowIdentity>, String>;
 }
 
+struct WorkspaceRestriction {
+    backend: Arc<dyn crate::workspace::WorkspaceBackend>,
+    space: Mutex<Option<u64>>,
+}
+
 pub struct SelectedWindows {
+    workspace: OnceLock<WorkspaceRestriction>,
     windows: Mutex<HashMap<WindowTarget, Option<Arc<dyn WindowIdentity>>>>,
 }
 
@@ -39,6 +45,7 @@ impl SelectedWindows {
             windows.insert(target, Some(backend.bind(target)?));
         }
         Ok(Self {
+            workspace: OnceLock::new(),
             windows: Mutex::new(windows),
         })
     }
@@ -46,6 +53,40 @@ impl SelectedWindows {
     /// Once a lifetime proof fails it stays revoked, even if the numeric IDs
     /// subsequently reappear. A trusted host must create a new selection.
     pub fn validate(&self, target: WindowTarget) -> Result<(), String> {
+        self.native_identity(target)?;
+        if let Some(workspace) = self.workspace.get() {
+            let space = *workspace.space.lock().unwrap_or_else(|e| e.into_inner());
+            let space = space.ok_or("workspace_access_denied: no owned workspace")?;
+            if !workspace.backend.state(space)?.0
+                || workspace.backend.membership(target)? != [space]
+            {
+                return Err(
+                    "workspace_access_denied: approved window is outside the owned desktop".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn restrict_to_workspace(
+        &self,
+        backend: Arc<dyn crate::workspace::WorkspaceBackend>,
+    ) {
+        let _ = self.workspace.set(WorkspaceRestriction {
+            backend,
+            space: Mutex::new(None),
+        });
+    }
+
+    pub(crate) fn set_workspace(&self, space: Option<u64>) {
+        if let Some(workspace) = self.workspace.get() {
+            *workspace.space.lock().unwrap_or_else(|e| e.into_inner()) = space;
+        }
+    }
+
+    /// Return the already approved lifetime witness, never bind a caller's ID.
+    /// Native adapters may retain their own exact object for a bounded operation.
+    pub fn native_identity(&self, target: WindowTarget) -> Result<Arc<dyn WindowIdentity>, String> {
         let mut windows = self
             .windows
             .lock()
@@ -60,7 +101,7 @@ impl SelectedWindows {
             *lease = None;
             return Err("selected_window_stale: native lifetime could not be re-proven".into());
         }
-        Ok(())
+        Ok(identity.clone())
     }
 
     pub fn live_targets(&self) -> Vec<WindowTarget> {
@@ -109,9 +150,10 @@ impl SelectedWindows {
             | "get_session_state" | "list_sessions" | "wait"
             | "create_workspace" | "get_workspace_state" | "reveal_workspace" | "release_workspace"
             | "restore_workspace_windows" | "delete_workspace" => Ok(()),
+            "move_window_to_workspace" => self.native_identity(Self::target(args)?).map(|_| ()),
             "get_window_state" | "click" | "double_click" | "right_click" | "scroll"
             | "drag" | "type_text" | "press_key" | "hotkey"
-            | "set_value" | "move_window_to_workspace" => {
+            | "set_value" => {
                 if args.get("delivery_mode").and_then(Value::as_str).is_some_and(|mode| mode.eq_ignore_ascii_case("foreground")) {
                     return Err("selected_window_background_required: foreground delivery is not admitted".into());
                 }

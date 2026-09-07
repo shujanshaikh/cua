@@ -128,7 +128,7 @@ impl Tool for DoubleClickTool {
             // advertises AXOpen uses the exact semantic route; all other
             // elements require the stricter routed-pointer proof. Do not let a
             // failed AXOpen silently cross into an ungated pointer fallback.
-            let has_ax_open = tokio::task::spawn_blocking(move || unsafe {
+            let has_ax_open = cua_driver_core::tool::spawn_blocking_with_authorization(move || unsafe {
                 copy_action_names(element_ptr as AXUIElementRef)
                     .iter()
                     .any(|action| action == "AXOpen")
@@ -150,7 +150,7 @@ impl Tool for DoubleClickTool {
             // Thread the resolved session cursor key into the blocking AX path
             // so its ClickPulse lands on THIS session's cursor, not "default".
             let ck = cursor_key.clone();
-            let result = tokio::task::spawn_blocking(move || {
+            let result = cua_driver_core::tool::spawn_blocking_with_authorization(move || {
                 ax_double_click(
                     pid,
                     wid,
@@ -256,7 +256,7 @@ impl Tool for DoubleClickTool {
         );
 
         let fg = delivery_mode.is_foreground() && window_id.is_some();
-        let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let result = cua_driver_core::tool::spawn_blocking_with_authorization(move || -> anyhow::Result<()> {
             let do_click = move || -> anyhow::Result<()> {
                 if let Some(wid) = window_id {
                     crate::input::mouse::click_at_xy_with_window_local(

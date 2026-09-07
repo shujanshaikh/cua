@@ -4,7 +4,21 @@ fn main() {
     println!("accessibility={}", unsafe {
         platform_macos::ax::bindings::AXIsProcessTrusted()
     });
+    println!(
+        "display_ids={:?}",
+        core_graphics::display::CGDisplay::active_displays()
+    );
     println!("before={:?}", platform_macos::spaces::managed_displays());
+    if args.iter().any(|arg| arg == "--mission-control-create") {
+        println!(
+            "mission_control_create={:?}",
+            platform_macos::spaces::create_with_mission_control(
+                args.iter()
+                    .position(|a| a == "--display")
+                    .map(|i| args[i + 1].parse().unwrap())
+            )
+        );
+    }
     if args.iter().any(|arg| arg == "--create") {
         println!("create={:?}", platform_macos::spaces::create());
     }
@@ -23,6 +37,10 @@ fn main() {
             assert_eq!(
                 platform_macos::windows::resolve_window_owner(pid, wid),
                 platform_macos::windows::WindowOwner::SamePid
+            );
+            println!(
+                "fixture_geometry={:?}",
+                platform_macos::windows::window_bounds_by_id(wid)
             );
             println!(
                 "fixture_membership={{wid:{wid},spaces:{:?}}}",

@@ -395,7 +395,7 @@
     },
     {
       "name": "create_workspace",
-      "description": "Create a session-owned agent Space without revealing it. Requires a trusted selected-window session. When trusted configuration supplies an existing Space, attach to it and report space_created=false. Private native operations must verify their postconditions; unsupported platforms refuse.",
+      "description": "Create a session-owned agent Space without selecting it. Trusted configuration may explicitly permit visible Mission Control setup on macOS. Requires a trusted selected-window session. When trusted configuration supplies an existing Space, attach to it and report space_created=false. Private native operations must verify their postconditions; unsupported platforms refuse.",
       "platforms": [
         "macos",
         "windows",
@@ -510,7 +510,7 @@
     },
     {
       "name": "delete_workspace",
-      "description": "Explicitly delete an empty Space created by this session. Never delete a pre-existing Space or close applications. Unsupported native deletion refuses.",
+      "description": "Explicitly delete an empty inactive Space created by this session. macOS deletion briefly shows Mission Control. Never delete a pre-existing Space or close applications. Unsupported native deletion refuses.",
       "platforms": [
         "macos",
         "windows",
@@ -2851,7 +2851,7 @@
     },
     {
       "name": "release_workspace",
-      "description": "Release this session's workspace ownership. Preserve applications, windows and Spaces. Releasing ownership does not change access approval.",
+      "description": "Release this session's workspace ownership. Preserve applications, windows and Spaces. Releasing ownership preserves window approval; workspace-only sessions lose access until a workspace is owned again.",
       "platforms": [
         "macos",
         "windows",

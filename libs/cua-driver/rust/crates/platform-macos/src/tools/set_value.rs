@@ -179,7 +179,7 @@ impl Tool for SetValueTool {
 
         let cursor_key = super::cursor_tools::resolve_cursor_key(&args);
         let center_ptr = element_ptr as usize;
-        if let Ok(Some((screen_x, screen_y))) = tokio::task::spawn_blocking(move || unsafe {
+        if let Ok(Some((screen_x, screen_y))) = cua_driver_core::tool::spawn_blocking_with_authorization(move || unsafe {
             crate::ax::bindings::element_screen_center(center_ptr as AXUIElementRef)
         })
         .await
@@ -218,7 +218,7 @@ impl Tool for SetValueTool {
             prior_front,
             "set_value.AXValue",
             || async move {
-                tokio::task::spawn_blocking(move || {
+                cua_driver_core::tool::spawn_blocking_with_authorization(move || {
                     set_value_blocking(element_ptr, element_index, pid, &value, allow_unbound_web)
                 })
                 .await

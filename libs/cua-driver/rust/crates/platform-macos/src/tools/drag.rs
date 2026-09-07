@@ -138,7 +138,7 @@ impl Tool for DragTool {
                 cursor_key.clone(),
                 cursor_overlay::OverlayCommand::SetPressed(true),
             );
-            let result = tokio::task::spawn_blocking(move || {
+            let result = cua_driver_core::tool::spawn_blocking_with_authorization(move || {
                 let modifier_refs: Vec<&str> = modifiers.iter().map(String::as_str).collect();
                 crate::input::mouse::drag_at_xy_foreground_observed(
                     from_x,
@@ -313,7 +313,7 @@ impl Tool for DragTool {
             prior_front,
             "drag.CGEvent",
             || async move {
-                tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                cua_driver_core::tool::spawn_blocking_with_authorization(move || -> anyhow::Result<()> {
                     let do_it = move || -> anyhow::Result<()> {
                         let m: Vec<&str> = mods_owned.iter().map(String::as_str).collect();
                         if fg {

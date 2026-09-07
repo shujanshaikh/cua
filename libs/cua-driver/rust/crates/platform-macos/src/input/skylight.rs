@@ -21,6 +21,11 @@ use std::ffi::{c_void, CStr};
 use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::OnceLock;
 
+pub(crate) fn bridged_window_management_operation() -> Option<*mut c_void> {
+    static ADDRESS: OnceLock<Option<usize>> = OnceLock::new();
+    ADDRESS.get_or_init(|| super::skylight_symbols::find_local(c"__ZL54SLSPerformAsynchronousBridgedWindowManagementOperationP47SLSAsynchronousBridgedWindowManagementOperation").map(|p| p as usize)).map(|p| p as *mut c_void)
+}
+
 // ── Function-pointer typedefs ──────────────────────────────────────────────
 
 /// `void SLEventPostToPid(pid_t, CGEventRef)`

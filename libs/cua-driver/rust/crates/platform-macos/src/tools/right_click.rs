@@ -167,7 +167,7 @@ impl Tool for RightClickTool {
             };
 
             let result =
-                tokio::task::spawn_blocking(move || ax_show_menu(element_ptr, idx, pid, wid)).await;
+                cua_driver_core::tool::spawn_blocking_with_authorization(move || ax_show_menu(element_ptr, idx, pid, wid)).await;
 
             return match result {
                 Ok(Ok(msg)) => ToolResult::text(msg),
@@ -255,7 +255,7 @@ impl Tool for RightClickTool {
         };
 
         let fg = delivery_mode.is_foreground() && window_id.is_some();
-        let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let result = cua_driver_core::tool::spawn_blocking_with_authorization(move || -> anyhow::Result<()> {
             let do_it = move || -> anyhow::Result<()> {
                 let m: Vec<&str> = modifiers.iter().map(String::as_str).collect();
                 if let Some(wid) = window_id {

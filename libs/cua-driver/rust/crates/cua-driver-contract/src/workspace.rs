@@ -83,12 +83,12 @@ fn contract<I: ToolInput>(description: &str, read_only: bool, destructive: bool)
 
 pub fn contracts() -> Vec<ToolContract> {
     vec![
-        contract::<CreateWorkspaceInput>("Create a session-owned agent Space without revealing it. Requires a trusted selected-window session. When trusted configuration supplies an existing Space, attach to it and report space_created=false. Private native operations must verify their postconditions; unsupported platforms refuse.", false, false),
+        contract::<CreateWorkspaceInput>("Create a session-owned agent Space without selecting it. Trusted configuration may explicitly permit visible Mission Control setup on macOS. Requires a trusted selected-window session. When trusted configuration supplies an existing Space, attach to it and report space_created=false. Private native operations must verify their postconditions; unsupported platforms refuse.", false, false),
         contract::<GetWorkspaceStateInput>("Read the current session's workspace ownership and approved window membership. Reports user movement, stale windows and deleted Spaces without capturing a display.", true, false),
         contract::<MoveWindowToWorkspaceInput>("Move an already-approved exact window into this session's workspace and verify membership. Moving never grants access and never switches Spaces.", false, false),
         contract::<RevealWorkspaceInput>("Explicitly switch to this session's workspace. This is the only workspace operation that may switch the user's active Space.", false, false),
-        contract::<ReleaseWorkspaceInput>("Release this session's workspace ownership. Preserve applications, windows and Spaces. Releasing ownership does not change access approval.", false, false),
+        contract::<ReleaseWorkspaceInput>("Release this session's workspace ownership. Preserve applications, windows and Spaces. Releasing ownership preserves window approval; workspace-only sessions lose access until a workspace is owned again.", false, false),
         contract::<RestoreWorkspaceWindowsInput>("Explicitly restore windows moved by this workspace to their recorded original Spaces. Refuse to override subsequent user movement; report partial failures. Never switch Spaces.", false, false),
-        contract::<DeleteWorkspaceInput>("Explicitly delete an empty Space created by this session. Never delete a pre-existing Space or close applications. Unsupported native deletion refuses.", false, true),
+        contract::<DeleteWorkspaceInput>("Explicitly delete an empty inactive Space created by this session. macOS deletion briefly shows Mission Control. Never delete a pre-existing Space or close applications. Unsupported native deletion refuses.", false, true),
     ]
 }

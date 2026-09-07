@@ -50,6 +50,32 @@ pub fn current_dispatch_authorization_context(
     DISPATCH_AUTHORIZATION_CONTEXT.try_with(Arc::clone).ok()
 }
 
+/// Carry trusted authorization into a native worker. Tokio task locals do not
+/// otherwise cross spawn_blocking, including retained selected-window leases.
+pub fn spawn_blocking_with_authorization<F, R>(work: F) -> tokio::task::JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let context = current_dispatch_authorization_context();
+    let runtime = DISPATCH_RUNTIME_SCOPE.try_with(Clone::clone).ok();
+    let observation = DISPATCH_OBSERVATION_SCOPE.try_with(Clone::clone).ok();
+    tokio::task::spawn_blocking(move || {
+        let work = || match observation {
+            Some(scope) => DISPATCH_OBSERVATION_SCOPE.sync_scope(scope, work),
+            None => work(),
+        };
+        let work = || match runtime {
+            Some(scope) => DISPATCH_RUNTIME_SCOPE.sync_scope(scope, work),
+            None => work(),
+        };
+        match context {
+            Some(context) => DISPATCH_AUTHORIZATION_CONTEXT.sync_scope(context, work),
+            None => work(),
+        }
+    })
+}
+
 #[doc(hidden)]
 pub fn current_selected_observation_scope() -> Option<String> {
     let context = current_dispatch_authorization_context()?;
@@ -676,7 +702,17 @@ impl ToolRegistry {
             return Ok(());
         }
         let backend = self.selection_backend.as_deref().ok_or("selected_window_operation_unsupported: native lifetime binding is unavailable on this platform")?;
-        context.bind_selected_windows(backend)
+        context.bind_selected_windows(backend)?;
+        if context
+            .capability_manifest()
+            .is_some_and(|m| m.workspace_only())
+        {
+            let backend = self.workspace_backend.clone().ok_or("workspace_operation_unsupported: workspace-only access is unavailable on this platform")?;
+            if let Some(selection) = context.selected_windows()? {
+                selection.restrict_to_workspace(backend);
+            }
+        }
+        Ok(())
     }
 
     pub fn new() -> Self {

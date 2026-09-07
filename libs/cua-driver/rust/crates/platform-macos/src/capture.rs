@@ -509,7 +509,9 @@ fn build_window_capture_plan(
     let config = SCStreamConfiguration::new()
         .with_width(out_w)
         .with_height(out_h)
-        .with_includes_child_windows(false);
+        .with_includes_child_windows(false)
+        .with_shows_cursor(false)
+        .with_captures_audio(false);
 
     Ok(std::sync::Arc::new(WindowCapturePlan {
         filter,

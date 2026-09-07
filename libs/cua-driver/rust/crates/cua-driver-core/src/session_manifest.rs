@@ -46,6 +46,9 @@ pub struct SessionManifest {
     desktop_display: bool,
     selected_windows_only: bool,
     workspace_space_id: Option<u64>,
+    workspace_allow_mission_control: bool,
+    workspace_only: bool,
+    workspace_display_id: Option<u32>,
     readable_paths: HashSet<String>,
     writable_paths: HashSet<String>,
     readable_roots: Vec<PathGrant>,
@@ -81,6 +84,17 @@ struct PathGrant {
 }
 
 impl SessionManifest {
+    pub fn workspace_only(&self) -> bool {
+        self.workspace_only
+    }
+
+    pub fn workspace_creation_options(&self) -> crate::workspace::WorkspaceCreationOptions {
+        crate::workspace::WorkspaceCreationOptions {
+            allow_mission_control: self.workspace_allow_mission_control,
+            display_id: self.workspace_display_id,
+        }
+    }
+
     pub fn workspace_space_id(&self) -> Option<u64> {
         self.workspace_space_id
     }
@@ -624,6 +638,12 @@ struct RawDesktopResources {
     #[serde(default)]
     workspace_space_id: Option<u64>,
     #[serde(default)]
+    workspace_allow_mission_control: bool,
+    #[serde(default)]
+    workspace_only: bool,
+    #[serde(default)]
+    workspace_display_id: Option<u32>,
+    #[serde(default)]
     selected_windows_only: bool,
     #[serde(default)]
     applications: Vec<i64>,
@@ -801,6 +821,9 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
         } = browser;
         let RawDesktopResources {
             workspace_space_id,
+            workspace_allow_mission_control,
+            workspace_only,
+            workspace_display_id,
             selected_windows_only,
             applications: raw_desktop_applications,
             windows: raw_desktop_windows,
@@ -939,6 +962,18 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
                     .to_owned(),
             );
         }
+        if workspace_only && (version != 3 || !selected_windows_only) {
+            return Err("workspace_only requires version 3 selected windows".into());
+        }
+        if workspace_allow_mission_control || workspace_display_id.is_some() {
+            if version != 3
+                || !selected_windows_only
+                || workspace_space_id.is_some()
+                || workspace_display_id == Some(0)
+            {
+                return Err("Mission Control setup requires version 3 selected windows, a positive display id when supplied, and no attached Space".into());
+            }
+        }
         if (selected_windows_only || workspace_space_id.is_some()) && version != 3 {
             return Err("selected-window workspaces require capability manifest version 3".into());
         }
@@ -1058,6 +1093,9 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             desktop_windows,
             desktop_display,
             workspace_space_id,
+            workspace_allow_mission_control,
+            workspace_only,
+            workspace_display_id,
             selected_windows_only,
             readable_paths,
             writable_paths,
@@ -1424,6 +1462,30 @@ mod tests {
         .is_err());
         let empty = manifest(r#"{"version":3,"resources":{"desktop":{"selected_windows_only":true}},"allow":{"tools":["get_window_state"]}}"#).unwrap();
         assert_eq!(empty.selected_window_targets(), Some(vec![]));
+    }
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn visible_workspace_setup_is_trusted_v3_configuration() {
+        let source = r#"{"version":3,"resources":{"desktop":{"selected_windows_only":true,"workspace_only":true,"workspace_allow_mission_control":true,"workspace_display_id":1}},"allow":{"tools":["create_workspace"]}}"#;
+        let loaded = manifest(source).unwrap();
+        assert!(loaded.workspace_only());
+        assert!(loaded.workspace_creation_options().allow_mission_control);
+        assert_eq!(loaded.workspace_creation_options().display_id, Some(1));
+        for invalid in [
+            source.replace("\"version\":3", "\"version\":2"),
+            source.replace(
+                "\"selected_windows_only\":true",
+                "\"selected_windows_only\":false",
+            ),
+            source.replace("\"workspace_display_id\":1", "\"workspace_display_id\":0"),
+            source.replace(
+                "\"workspace_display_id\":1",
+                "\"workspace_display_id\":1,\"workspace_space_id\":100",
+            ),
+        ] {
+            assert!(manifest(&invalid).is_err());
+        }
     }
 
     #[cfg(feature = "yaml")]

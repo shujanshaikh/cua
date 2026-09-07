@@ -186,7 +186,7 @@ pub fn gather_background_facts(
     };
 
     let target = records.iter().find(|record| record.window_id == window_id);
-    let competing_keyboard_destinations = count_competing_keyboard_destinations(
+    let mut competing_keyboard_destinations = count_competing_keyboard_destinations(
         pid,
         window_id,
         all_windows()
@@ -194,6 +194,22 @@ pub fn gather_background_facts(
             .map(|window| (window.pid, window.window_id)),
         &records,
     );
+
+    // An off-Space sibling can be missing from AXWindows. Its absence is not
+    // proof that process-scoped keyboard delivery has a unique destination.
+    if cua_driver_core::tool::current_dispatch_authorization_context()
+        .is_some_and(|c| c.selected_windows().ok().flatten().is_some())
+    {
+        competing_keyboard_destinations += all_windows()
+            .iter()
+            .filter(|w| {
+                w.pid == pid
+                    && w.window_id != window_id
+                    && w.on_current_space != Some(true)
+                    && !records.iter().any(|r| r.window_id == w.window_id)
+            })
+            .count();
+    }
 
     BackgroundTargetFacts {
         window_server,
