@@ -86,6 +86,18 @@ impl Tool for LaunchAppTool {
     }
 
     async fn invoke(&self, args: Value) -> ToolResult {
+        self.invoke_with_launch_policy(args, false).await
+    }
+}
+
+impl LaunchAppTool {
+    /// Internal trusted-recipe entry point, never controlled by a public argument.
+    /// A debugging endpoint requires a newly allocated profile directory.
+    pub(crate) async fn launch_workspace(&self, args: Value) -> ToolResult {
+        self.invoke_with_launch_policy(args, true).await
+    }
+
+    async fn invoke_with_launch_policy(&self, args: Value, trusted_workspace: bool) -> ToolResult {
         use cua_driver_core::tool_args::ArgsExt;
         let bundle_id = args.opt_str("bundle_id");
         let name = args.opt_str("name");
@@ -114,9 +126,16 @@ impl Tool for LaunchAppTool {
             .iter()
             .any(|argument| contains_remote_debugging_flag(argument))
         {
-            return ToolResult::error(
-                "Chromium remote-debugging flags moved to browser_prepare so DevTools is never enabled on an unproven user profile",
-            );
+            if !trusted_workspace {
+                return ToolResult::error(
+                    "Chromium remote-debugging flags moved to browser_prepare so DevTools is never enabled on an unproven user profile",
+                );
+            }
+            if let Err(error) =
+                prepare_workspace_browser_profile(&additional_arguments, creates_new_instance)
+            {
+                return ToolResult::error(error);
+            }
         }
 
         if bundle_id.is_none() && name.is_none() {
@@ -498,6 +517,46 @@ impl Tool for LaunchAppTool {
     }
 }
 
+fn prepare_workspace_browser_profile(
+    arguments: &[String],
+    creates_new_instance: bool,
+) -> Result<(), String> {
+    let debug: Vec<_> = arguments
+        .iter()
+        .filter(|arg| arg.to_ascii_lowercase().contains("--remote-debugging-"))
+        .collect();
+    let profile_args: Vec<_> = arguments
+        .iter()
+        .filter(|arg| arg.to_ascii_lowercase().starts_with("--user-data-dir"))
+        .collect();
+    let profiles: Vec<_> = profile_args
+        .iter()
+        .filter_map(|arg| arg.strip_prefix("--user-data-dir="))
+        .collect();
+    if !creates_new_instance
+        || debug.len() != 1
+        || debug[0] != "--remote-debugging-port=0"
+        || profiles.len() != 1
+        || profile_args.len() != 1
+    {
+        return Err("workspace_browser_profile_required: use one fresh absolute --user-data-dir and --remote-debugging-port=0".into());
+    }
+    let path = std::path::Path::new(profiles[0]);
+    if !path.is_absolute()
+        || path.file_name().is_none()
+        || path
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .as_deref()
+            != path.parent()
+    {
+        return Err("workspace_browser_profile_required: profile parent must be an existing canonical directory".into());
+    }
+    std::fs::create_dir(path).map_err(|error| {
+        format!("workspace_browser_profile_required: profile must be new: {error}")
+    })
+}
+
 fn contains_remote_debugging_flag(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     lower.contains("--remote-debugging-port") || lower.contains("--remote-debugging-pipe")
@@ -719,8 +778,8 @@ fn hex_value(byte: u8) -> Option<u8> {
 mod tests {
     use super::{
         contains_remote_debugging_flag, is_cua_driver_bundle_id, local_file_target,
-        normalize_launch_url, preflight_file_urls, response_identity, structured_launch_failure,
-        LaunchAppTool,
+        normalize_launch_url, preflight_file_urls, prepare_workspace_browser_profile,
+        response_identity, structured_launch_failure, LaunchAppTool,
     };
     use cua_driver_core::tool::Tool;
     use serde_json::json;
@@ -783,6 +842,24 @@ mod tests {
             local_file_target("file://localhost/tmp/%E2%9C%93.txt"),
             Some(PathBuf::from("/tmp/✓.txt"))
         );
+    }
+
+    #[test]
+    fn trusted_workspace_debugging_requires_an_unused_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().canonicalize().unwrap().join("profile");
+        let args = vec![
+            format!("--user-data-dir={}", profile.display()),
+            "--remote-debugging-port=0".into(),
+        ];
+        assert!(prepare_workspace_browser_profile(&args, false).is_err());
+        assert!(prepare_workspace_browser_profile(&args, true).is_ok());
+        assert!(prepare_workspace_browser_profile(&args, true).is_err());
+        let mut duplicate = args.clone();
+        duplicate.extend(["--user-data-dir".into(), "/private/tmp/personal".into()]);
+        assert!(prepare_workspace_browser_profile(&duplicate, true).is_err());
+        let fixed_port = vec![args[0].clone(), "--remote-debugging-port=9222".into()];
+        assert!(prepare_workspace_browser_profile(&fixed_port, true).is_err());
     }
 
     #[test]

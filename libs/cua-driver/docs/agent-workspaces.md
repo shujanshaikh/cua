@@ -12,6 +12,11 @@ see the [workspace apps MCP example](../examples/workspace-apps/README.md).
 window created by that recipe. The following static-window setup is still
 available for hosts that already have approved windows.
 
+For the September 7 session audit and subsequent Helium/TextEdit checks, see
+[workspace session audit](workspace-session-audit.md). The workspace-apps example
+now supports exact-window typed browser navigation and an optional Ghostty recipe;
+Ghostty's inactive startup remains limited on the tested installed version.
+
 ## Trusted selection
 
 A trusted host writes a capability manifest and supplies its path through `TrustedSessionOptions.capability_manifest_path`. Window IDs come from the host's existing trusted discovery/approval mechanism. The agent cannot set or extend the selection through tool arguments.
@@ -108,7 +113,7 @@ Exact input calls include both `pid` and `window_id`, even when using an `elemen
 
 New windows receive no inherited grant. Sheets and application menu bars are excluded from selected AX trees. Child windows are excluded from ScreenCaptureKit window capture. Separately addressable top-level dialogs require a new trusted selection; unresolved sheets and child surfaces are unsupported. Parent-rendered pixels remain part of the approved parent surface. Minimized or hidden windows have no selected screenshot fallback.
 
-Browser bind operations require an approved exact native window. Subsequent operations require implementation-attested native ownership of the session's browser target and tab. Existing browser permission checks remain in place. Profile preparation, legacy `page`, process-wide browser attachment, and unbound browser scripting fallbacks are refused. Installed-browser coverage has not been run for this branch.
+Browser bind operations require an approved exact native window. Subsequent operations require implementation-attested native ownership of the session's browser target and tab. Existing browser permission checks remain in place. Profile preparation, legacy `page`, process-wide browser attachment, and unbound browser scripting fallbacks are refused. Helium binding, screenshots, and new-tab navigation have supporting native evidence in the [session audit](workspace-session-audit.md); the canonical installed-browser gate remains outstanding.
 
 Desktop capture/input, foreground delivery, app launching/termination, clipboard access and tools without a proven selection boundary are unavailable. Existing ambiguous keyboard and unresolved AX refusals remain refusals. No workspace operation silently activates a window, switches a Space, posts global input or moves the physical cursor as a fallback. The shared-host cursor measurement was inconclusive; background support is not universally certified.
 

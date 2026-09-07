@@ -173,6 +173,24 @@ pub(super) fn unsupported_engine_refusal(
     }))
 }
 
+fn workspace_launched_endpoint(pid: i64, window_id: u64) -> bool {
+    crate::tool::current_dispatch_authorization_context().is_some_and(|context| {
+        context
+            .capability_manifest()
+            .is_some_and(|manifest| manifest.browser_selected_windows_only())
+            && context
+                .selected_windows()
+                .ok()
+                .flatten()
+                .is_some_and(|selection| {
+                    selection.is_live_launched_window(crate::selected_windows::WindowTarget {
+                        pid,
+                        window_id,
+                    })
+                })
+    })
+}
+
 fn endpoint_access_class(
     has_existing_profile_grant: bool,
     driver_owned: bool,
@@ -1240,8 +1258,11 @@ impl BrowserEngine {
         let driver_owned = self.is_driver_owned_pid_for_session(session, pid)
             || transport_session
                 .is_some_and(|owner| self.is_driver_owned_pid_for_session(owner, pid));
-        let access_class =
-            endpoint_access_class(grant.is_some(), driver_owned, class.process_role)?;
+        let access_class = if workspace_launched_endpoint(pid, window_id) {
+            EndpointAccessClass::WorkspaceLaunched
+        } else {
+            endpoint_access_class(grant.is_some(), driver_owned, class.process_role)?
+        };
 
         let native = self.native_window_checked(pid, window_id).await?;
         let fingerprint = self.platform.process_fingerprint(pid).await?;
@@ -1449,6 +1470,12 @@ impl BrowserEngine {
         }
 
         match record.endpoint_access_class {
+            EndpointAccessClass::WorkspaceLaunched => {
+                if !workspace_launched_endpoint(record.pid, record.window_id) {
+                    return Err(refuse(BrowserRefusalCode::BrowserConsentRequired,
+                        "the workspace launch grant is no longer live; bind a window from this workspace"));
+                }
+            }
             EndpointAccessClass::DriverOwned => {
                 let lifecycle_is_live = self.is_driver_owned_pid_for_session(session, record.pid)
                     || record.transport_session.as_deref().is_some_and(|owner| {

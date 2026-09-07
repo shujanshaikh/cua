@@ -2408,3 +2408,158 @@ async fn keystrokes_use_char_events_for_text_delivery() {
     assert!(recorded_calls(&f, "Page.bringToFront").is_empty());
     assert!(recorded_calls(&f, "Target.activateTarget").is_empty());
 }
+
+#[cfg(feature = "yaml")]
+#[tokio::test]
+async fn workspace_browser_authority_requires_a_live_launched_window() {
+    use crate::authorization::PermissionMode;
+    use crate::selected_windows::{WindowIdentity, WindowSelectionBackend, WindowTarget};
+    use crate::session_authorization::{
+        DelegatedSessionRequest, SessionAuthorizationRegistry, SessionModeCeiling,
+    };
+    use crate::tool::ToolRegistry;
+    use std::time::Duration;
+    struct Identity(Arc<AtomicBool>);
+    impl WindowIdentity for Identity {
+        fn validate(&self) -> Result<(), String> {
+            self.0
+                .load(Ordering::SeqCst)
+                .then_some(())
+                .ok_or("closed".into())
+        }
+    }
+    struct Selection(Arc<AtomicBool>);
+    impl WindowSelectionBackend for Selection {
+        fn bind(&self, _: WindowTarget) -> Result<Arc<dyn WindowIdentity>, String> {
+            Ok(Arc::new(Identity(self.0.clone())))
+        }
+    }
+    struct Apps(crate::tool::ToolDef);
+    #[async_trait]
+    impl Tool for Apps {
+        fn def(&self) -> &crate::tool::ToolDef {
+            &self.0
+        }
+        async fn invoke(&self, _: Value) -> ToolResult {
+            ToolResult::text("unused")
+        }
+        async fn protected_resource_scope(
+            &self,
+            _: &str,
+            _: &Value,
+        ) -> Result<Option<Value>, String> {
+            Ok(Some(json!({"bundle_id":"com.test.browser"})))
+        }
+    }
+    let state = Arc::new(StdMutex::new(FixtureState::default()));
+    let server = MockCdpServer::start(fixture_handler(state)).await;
+    let engine = BrowserEngine::new(Arc::new(FixturePlatform {
+        ws_url: server.ws_url(),
+        trusted_input_limited: false,
+        managed_endpoint_visible: true,
+        process_role: BrowserProcessRole::StandaloneConsumer,
+        managed_discovery_invoked: Arc::new(AtomicBool::new(false)),
+        existing_endpoint_visible: Arc::new(AtomicBool::new(true)),
+        setup_invoked: Arc::new(AtomicBool::new(false)),
+        setup_aborted: Arc::new(AtomicBool::new(false)),
+        stall_consent: false,
+    }));
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        file.path(),
+        json!({"version":3,"resources":{
+        "apps":[{"bundle_id":"com.test.browser","windows":"all"}],
+        "browser":{"selected_windows_only":true},
+        "desktop":{"selected_windows_only":true,"applications":[1],"windows":[{"pid":1,"window_id":8}]}
+    },"allow":{"tools":["get_browser_state","browser_navigate"]}})
+        .to_string(),
+    )
+    .unwrap();
+    let manifest = Arc::new(crate::session_manifest::load_manifest(file.path()).unwrap());
+    let auth = SessionAuthorizationRegistry::with_ceiling(
+        SessionModeCeiling::for_trusted_sessions(
+            [PermissionMode::Standard],
+            false,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        )
+        .unwrap(),
+    );
+    let (host, connection) = auth.trusted_in_process_binding();
+    auth.bind_delegated_session(
+        &host,
+        &connection,
+        DelegatedSessionRequest {
+            public_session: "workspace-browser".into(),
+            transport_session: "transport".into(),
+            mode: PermissionMode::Standard,
+            ttl: Duration::from_secs(60),
+            idle_ttl: Duration::from_secs(60),
+            capability_manifest: Some(manifest),
+        },
+    )
+    .unwrap();
+    let context = auth
+        .resolve_delegated(&connection, "workspace-browser", "transport")
+        .unwrap();
+    let live = Arc::new(AtomicBool::new(true));
+    let mut registry = ToolRegistry::new();
+    registry.set_window_selection_backend(Arc::new(Selection(live.clone())));
+    registry.register(Box::new(GetBrowserStateTool::new(engine)));
+    registry.register(Box::new(Apps(crate::tool::ToolDef {
+        name: "list_apps".into(),
+        description: "Fixture identity".into(),
+        input_schema: json!({}),
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        open_world: false,
+    })));
+    registry.bind_selected_windows(&context).unwrap();
+    let args = |wid| json!({"session":"workspace-browser","pid":1,"window_id":wid});
+    let static_window = registry
+        .invoke_with_context("get_browser_state", args(8), context.clone())
+        .await;
+    assert_eq!(
+        static_window.structured_content.as_ref().unwrap()["refusal"]["code"],
+        "browser_consent_required",
+        "preselection must not grant endpoint access"
+    );
+    context
+        .selected_windows()
+        .unwrap()
+        .unwrap()
+        .admit_launched_window(
+            WindowTarget {
+                pid: 1,
+                window_id: 7,
+            },
+            Arc::new(Identity(live.clone())),
+        )
+        .unwrap();
+    let bound = registry
+        .invoke_with_context("get_browser_state", args(7), context.clone())
+        .await;
+    assert_ne!(bound.is_error, Some(true), "{bound:?}");
+    let sibling = registry
+        .invoke_with_context("get_browser_state", args(9), context.clone())
+        .await;
+    assert_eq!(sibling.is_error, Some(true));
+    live.store(false, Ordering::SeqCst);
+    let bound = bound.structured_content.unwrap();
+    let stale = registry
+        .invoke_with_context(
+            "get_browser_state",
+            json!({
+                "session":"workspace-browser", "target_id":bound["target_id"],
+                "tab_id":bound["tabs"][0]["tab_id"]
+            }),
+            context,
+        )
+        .await;
+    assert_eq!(
+        stale.is_error,
+        Some(true),
+        "closed launch must revoke existing browser binding"
+    );
+}

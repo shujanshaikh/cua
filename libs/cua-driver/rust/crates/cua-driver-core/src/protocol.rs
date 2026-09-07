@@ -369,7 +369,7 @@ fn agent_instructions() -> String {
     format!(
         r#"cua-driver: cross-platform background computer-use automation.
 
-Before UI work, classify the desired outcome. For non-GUI outcomes, prefer a client-provided app API/SDK, headless/background interface, CLI, or filesystem operation and read the result back in that semantic domain. This server has no shell.
+For non-GUI outcomes, prefer a client-provided app API/SDK, headless/background interface, CLI, or filesystem operation and read the result back in that semantic domain. This server has no shell.
 
 On continuation/recent-work, when available, call `history_status`; if ready, make one bounded initial `history_query` before broad discovery; otherwise continue.
 
@@ -377,7 +377,7 @@ For app/window outcomes, use the narrowest semantic Cua route first: `set_window
 
 Workflow per turn:
 0. `start_session` is optional. For multi-call work, prefer a short `session` label and repeat it on every call that accepts it. Unnamed calls use the transport's implicit session. Only `start_session` revives an ended name; `end_session` explicitly cleans up.
-1. `launch_app`, then `get_window_state(pid, window_id)` to refresh element indices.
+1. Workspaces: `get_workspace_state`, `create_workspace`, `launch_workspace_app`; otherwise `launch_app`. Refresh `get_window_state(pid, window_id)`.
 2. Act with the fresh index.
 3. `verify_state(pid, window_id, expect)` checks bounded postconditions. `unknown` is not success; `include_screenshot:true` lets the multimodal agent judge visual evidence.
 

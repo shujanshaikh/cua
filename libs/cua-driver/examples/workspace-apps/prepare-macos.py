@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare trusted Helium/TextEdit launch recipes; launch no applications."""
+"""Prepare trusted Helium/TextEdit/Ghostty launch recipes; launch no applications."""
 import argparse
 import json
 from pathlib import Path
@@ -11,11 +11,15 @@ def main():
                         help="New directory for this workspace's profile, document, and manifest")
     parser.add_argument("--driver", type=Path, required=True,
                         help="Absolute path to the development cua-driver executable")
+    parser.add_argument("--ghostty", action="store_true",
+                        help="Allow a fresh Ghostty terminal in this workspace")
     args = parser.parse_args()
     driver = args.driver.resolve(strict=True)
     for app in ["/Applications/Helium.app", "/System/Applications/TextEdit.app"]:
         if not Path(app).is_dir():
             raise SystemExit(f"Required application is missing: {app}")
+    if args.ghostty and not Path("/Applications/Ghostty.app").is_dir():
+        raise SystemExit("Required application is missing: /Applications/Ghostty.app")
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
     notes = root / "Agent notes.txt"
@@ -27,6 +31,7 @@ def main():
                 {"bundle_id": "net.imput.helium", "launch": True},
                 {"bundle_id": "com.apple.TextEdit", "launch": True},
             ],
+            "browser": {"selected_windows_only": True},
             "desktop": {
                 "selected_windows_only": True,
                 "workspace_only": True,
@@ -37,6 +42,7 @@ def main():
                         "bundle_id": "net.imput.helium",
                         "arguments": ["--user-data-dir=" + str(root / "helium-profile"),
                                       "--no-first-run", "--no-default-browser-check",
+                                      "--remote-debugging-port=0",
                                       "--new-window", "https://example.com"],
                     },
                     "notes": {
@@ -50,6 +56,9 @@ def main():
                       "write": [{"dir": str(root), "recursive": True}]},
         },
         "allow": {"tools": [
+            "start_session", "get_session",
+            "get_browser_state", "browser_navigate", "browser_click", "browser_type",
+            "browser_dialog",
             "create_workspace", "get_workspace_state", "launch_workspace_app",
             "move_window_to_workspace", "reveal_workspace", "restore_workspace_windows",
             "release_workspace", "delete_workspace", "list_windows", "list_apps",
@@ -58,6 +67,14 @@ def main():
             "start_recording", "get_recording_state", "stop_recording", "end_session",
         ]},
     }
+    if args.ghostty:
+        manifest["resources"]["apps"].append(
+            {"bundle_id": "com.mitchellh.ghostty", "launch": True})
+        manifest["resources"]["desktop"]["workspace_applications"]["ghostty"] = {
+            "bundle_id": "com.mitchellh.ghostty",
+            "arguments": ["--config-default-files=false", "--window-save-state=never",
+                          "--working-directory=" + str(root)],
+        }
     manifest_path = root / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     config = {"mcpServers": {"cua-workspace-dev": {

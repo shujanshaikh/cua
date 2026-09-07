@@ -40,6 +40,7 @@ pub struct SessionManifest {
     existing_profiles: HashSet<(i64, u64)>,
     existing_profile_kind: bool,
     browser_origins: HashSet<String>,
+    browser_selected_windows_only: bool,
     applications: Vec<ApplicationGrant>,
     desktop_applications: HashSet<i64>,
     desktop_windows: HashSet<(i64, u64)>,
@@ -98,6 +99,10 @@ impl SessionManifest {
         self.workspace_applications
             .get(alias)
             .ok_or_else(|| "workspace_app_denied: app alias is not in trusted configuration".into())
+    }
+
+    pub(crate) fn browser_selected_windows_only(&self) -> bool {
+        self.browser_selected_windows_only
     }
 
     pub fn workspace_only(&self) -> bool {
@@ -200,8 +205,18 @@ impl SessionManifest {
 
     /// Validate a live top-level document after redirects and before input.
     pub fn authorize_browser_url(&self, raw: &str) -> Result<(), String> {
+        // Chromium's native New Tab button produces an internal blank page.
+        // It must remain observable so an exact-bound tab can navigate away.
+        if self.browser_selected_windows_only
+            && matches!(
+                raw,
+                "chrome://newtab/" | "chrome://newtab" | "chrome://new-tab-page/" | "about:blank"
+            )
+        {
+            return Ok(());
+        }
         let origin = canonical_origin(raw)?;
-        if self.browser_origins.contains(&origin) {
+        if self.browser_selected_windows_only || self.browser_origins.contains(&origin) {
             Ok(())
         } else {
             Err("the live browser origin is outside the capability manifest".to_owned())
@@ -405,6 +420,15 @@ impl SessionManifest {
     }
 
     fn authorize_resource_origin(&self, resource: &serde_json::Value) -> Result<(), String> {
+        if self.browser_selected_windows_only {
+            // The registry independently validates this adapter-attested exact
+            // target against the live selection before and after dispatch.
+            let target = crate::selected_windows::SelectedWindows::target(resource)?;
+            if target.pid <= 0 || target.window_id == 0 {
+                return Err("browser resource requires an exact native window".into());
+            }
+            return Ok(());
+        }
         let origin = resource
             .get("live_origin")
             .and_then(serde_json::Value::as_str)
@@ -608,6 +632,8 @@ struct RawResources {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawBrowserResources {
+    #[serde(default)]
+    selected_windows_only: bool,
     #[serde(default)]
     existing_profiles: Vec<RawExistingProfile>,
     #[serde(default)]
@@ -833,6 +859,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             computer_history,
         } = resources;
         let RawBrowserResources {
+            selected_windows_only: browser_selected_windows_only,
             existing_profiles: raw_existing_profiles,
             profiles: raw_browser_profiles,
             origins: raw_browser_origins,
@@ -980,6 +1007,11 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
                 "application identity resources require capability manifest version 2 or later"
                     .to_owned(),
             );
+        }
+        if browser_selected_windows_only
+            && (version != 3 || !selected_windows_only || !browser_origins.is_empty())
+        {
+            return Err("browser.selected_windows_only requires v3 desktop.selected_windows_only and no origin grants".into());
         }
         if workspace_only && (version != 3 || !selected_windows_only) {
             return Err("workspace_only requires version 3 selected windows".into());
@@ -1133,6 +1165,7 @@ pub fn load_manifest(path: &Path) -> Result<SessionManifest, String> {
             existing_profiles,
             existing_profile_kind,
             browser_origins,
+            browser_selected_windows_only,
             applications,
             desktop_applications,
             desktop_windows,
@@ -1766,6 +1799,40 @@ allow:
                 }),
             )
             .is_err());
+    }
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn browser_selected_window_grants_require_exact_selection() {
+        let source = r#"{"version":3,"resources":{"browser":{"selected_windows_only":true},"desktop":{"selected_windows_only":true}},"allow":{"tools":["get_browser_state","browser_navigate","get_window_state","set_value"]}}"#;
+        let grant = manifest(source).unwrap();
+        assert!(grant.authorize_browser_url("https://shujan.xyz").is_ok());
+        assert!(grant.authorize_browser_url("file:///etc/passwd").is_err());
+        assert!(grant
+            .authorize_protected_resource(
+                "browser_bound_input",
+                &serde_json::json!({
+                    "kind":"authenticated_browser_tab", "pid":42, "window_id":7
+                })
+            )
+            .is_ok());
+        assert!(grant
+            .authorize_protected_resource(
+                "browser_bound_input",
+                &serde_json::json!({
+                    "kind":"authenticated_browser_tab", "pid":42
+                })
+            )
+            .is_err());
+        let mut value: serde_json::Value = serde_json::from_str(source).unwrap();
+        value["version"] = serde_json::json!(2);
+        assert!(manifest(&value.to_string()).is_err());
+        value["version"] = serde_json::json!(3);
+        value["resources"]["desktop"]["selected_windows_only"] = serde_json::json!(false);
+        assert!(manifest(&value.to_string()).is_err());
+        value["resources"]["desktop"]["selected_windows_only"] = serde_json::json!(true);
+        value["resources"]["browser"]["origins"] = serde_json::json!(["https://example.com"]);
+        assert!(manifest(&value.to_string()).is_err());
     }
 
     #[cfg(feature = "yaml")]

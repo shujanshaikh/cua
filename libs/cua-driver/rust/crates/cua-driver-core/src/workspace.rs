@@ -139,7 +139,9 @@ impl Workspaces {
                     state: state.into(),
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let mut windows = windows;
+        windows.sort_by_key(|window| (window.pid, window.window_id));
         Ok(WorkspaceStateOutput {
             available_apps,
             owned: true,
@@ -275,6 +277,9 @@ impl Workspaces {
                             }
                             workspace.moved.insert(target, origin);
                             self.backend.move_window(target, workspace.space)?;
+                            if self.backend.membership(target)? != [workspace.space] {
+                                return Err("workspace_move_incomplete: launched window destination did not verify; query get_workspace_state and recover with move_window_to_workspace".into());
+                            }
                             selection.validate(target)?;
                         }
                     }
@@ -301,7 +306,7 @@ impl Workspaces {
                     }
                     "reveal_workspace" => self.backend.reveal(workspace.space)?,
                     "restore_workspace_windows" => {
-                        let mut failures = Vec::new();
+                        let mut failures: Vec<String> = Vec::new();
                         for (&target, origin) in &workspace.moved {
                             let outcome = (|| {
                                 selection.native_identity(target)?;
@@ -315,7 +320,12 @@ impl Workspaces {
                                 if current != [workspace.space] {
                                     return Err("workspace_user_moved: refusing to override a later placement".into());
                                 }
-                                self.backend.move_window(target, origin[0])
+                                self.backend.move_window(target, origin[0])?;
+                                selection.native_identity(target)?;
+                                if self.backend.membership(target)? != *origin {
+                                    return Err("workspace_restore_incomplete: original membership did not verify".into());
+                                }
+                                Ok(())
                             })();
                             if let Err(error) = outcome {
                                 failures.push(error);
@@ -387,12 +397,49 @@ impl Tool for WorkspaceTool {
         let workspaces = self.workspaces.clone();
         let name = self.def.name.clone();
         let outcome = crate::tool::spawn_blocking_with_authorization(move || {
-            workspaces.execute(&name, &args)
+            let result = workspaces.execute(&name, &args);
+            let recovery = if result.is_err() {
+                workspaces.execute("get_workspace_state", &args).ok()
+            } else {
+                None
+            };
+            let launch_target = args.get("app").and_then(Value::as_str).and_then(|alias| {
+                let session = args
+                    .get("session")
+                    .or_else(|| args.get("_session_id"))?
+                    .as_str()?;
+                let owned = workspaces
+                    .owned
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let target = owned.get(session)?.launched.get(alias)?;
+                Some(json!({"app":alias,"pid":target.pid,"window_id":target.window_id}))
+            });
+            (result, recovery, launch_target)
         })
         .await;
-        match outcome.unwrap_or_else(|error| Err(format!("workspace_worker_failed: {error}"))) {
-            Ok(state) => ToolResult::text("Workspace state verified.").with_structured(serde_json::to_value(state).expect("workspace state serializes")),
-            Err(message) => ToolResult::error(message.clone()).with_structured(json!({"code":message.split(':').next().unwrap_or("workspace_failed"), "message":message})),
+        let (outcome, recovery, launched_app) = outcome
+            .unwrap_or_else(|error| (Err(format!("workspace_worker_failed: {error}")), None, None));
+        match outcome {
+            Ok(state) => {
+                let mut structured =
+                    serde_json::to_value(state).expect("workspace state serializes");
+                if let Some(app) = launched_app {
+                    structured["launched_app"] = app;
+                }
+                ToolResult::text("Workspace state verified.").with_structured(structured)
+            }
+            Err(message) => {
+                let mut structured = json!({"code":message.split(':').next().unwrap_or("workspace_failed"), "message":message});
+                if let Some(state) = recovery {
+                    structured["workspace_state"] =
+                        serde_json::to_value(state).expect("workspace state serializes");
+                }
+                if let Some(app) = launched_app {
+                    structured["launched_app"] = app;
+                }
+                ToolResult::error(message).with_structured(structured)
+            }
         }
     }
 }
@@ -427,7 +474,7 @@ pub fn register(registry: &mut ToolRegistry, backend: Option<Arc<dyn WorkspaceBa
         registry.register(Box::new(WorkspaceTool {
             def: ToolDef {
                 name: contract.name,
-                description: contract.description,
+                description: format!("{} Workspace workflow: keep one session; read available_apps, create_workspace, then launch_workspace_app. Use launched_app.pid/window_id to observe and act. Input stays background; reveal_workspace requires an explicit desktop-switch request. Read background_input.routes before keyboard or pixel input. Missing screenshots can leave usable accessibility data; use include_screenshot:false for AX readback. On a partial launch, inspect workspace_state and move the retained launched_app with move_window_to_workspace before retrying. Never retry by launching another process.", contract.description),
                 input_schema: contract.input_schema,
                 read_only: contract.annotations.read_only,
                 destructive: contract.annotations.destructive,
@@ -463,6 +510,7 @@ mod tests {
         deleted: std::sync::atomic::AtomicBool,
         launch_count: std::sync::atomic::AtomicUsize,
         launch_fails: std::sync::atomic::AtomicBool,
+        move_noop: std::sync::atomic::AtomicBool,
     }
     impl WindowSelectionBackend for Native {
         fn bind(&self, _: WindowTarget) -> Result<Arc<dyn WindowIdentity>, String> {
@@ -509,6 +557,9 @@ mod tests {
                 .unwrap_or(vec![1]))
         }
         fn move_window(&self, target: WindowTarget, space: u64) -> Result<(), String> {
+            if self.move_noop.load(std::sync::atomic::Ordering::SeqCst) {
+                return Ok(());
+            }
             self.membership.lock().unwrap().insert(target, vec![space]);
             Ok(())
         }
@@ -617,6 +668,10 @@ mod tests {
             )
             .await;
             assert_ne!(result.is_error, Some(true), "{result:?}");
+            assert_eq!(
+                result.structured_content.as_ref().unwrap()["launched_app"],
+                json!({"app":"notes","pid":50,"window_id":51})
+            );
         }
         assert_eq!(
             native
@@ -630,6 +685,12 @@ mod tests {
         };
         let selection = selected.selected_windows().unwrap().unwrap();
         assert!(selection.validate(target).is_ok());
+        assert!(selection.is_live_launched_window(target));
+        assert!(!other
+            .selected_windows()
+            .unwrap()
+            .unwrap()
+            .is_live_launched_window(target));
         assert!(selection
             .validate(WindowTarget {
                 pid: 50,
@@ -653,11 +714,96 @@ mod tests {
             Some(true)
         );
         assert_eq!(native.membership(target).unwrap(), vec![1]);
+        assert!(!selection.is_live_launched_window(target));
         assert_eq!(
             native
                 .launch_count
                 .load(std::sync::atomic::Ordering::SeqCst),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn incomplete_launch_exposes_exact_recovery_without_spawning_again() {
+        let native = Arc::new(Native::default());
+        native
+            .move_noop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let auth = SessionAuthorizationRegistry::with_ceiling(
+            SessionModeCeiling::for_trusted_sessions(
+                [PermissionMode::Standard],
+                false,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
+        let selected = context(&auth, "recover", &[]);
+        let mut tools = ToolRegistry::new();
+        tools.set_window_selection_backend(native.clone());
+        tools.set_workspace_backend(native.clone());
+        tools.register_session_tools();
+        tools.bind_selected_windows(&selected).unwrap();
+        let call = |name: &'static str, args: Value| {
+            tools.invoke_with_context(name, args, selected.clone())
+        };
+        assert_ne!(
+            call("create_workspace", json!({"session":"recover"}))
+                .await
+                .is_error,
+            Some(true)
+        );
+        let failure = call(
+            "launch_workspace_app",
+            json!({"session":"recover","app":"notes"}),
+        )
+        .await;
+        assert_eq!(failure.is_error, Some(true));
+        let state = failure.structured_content.unwrap();
+        assert_eq!(state["code"], "workspace_move_incomplete");
+        assert_eq!(
+            state["launched_app"],
+            json!({"app":"notes","pid":50,"window_id":51})
+        );
+        assert_eq!(
+            state["workspace_state"]["windows"][0]["original_space_ids"],
+            json!([1])
+        );
+        native
+            .move_noop
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_ne!(
+            call(
+                "move_window_to_workspace",
+                json!({"session":"recover","pid":50,"window_id":51})
+            )
+            .await
+            .is_error,
+            Some(true)
+        );
+        assert_ne!(
+            call(
+                "launch_workspace_app",
+                json!({"session":"recover","app":"notes"})
+            )
+            .await
+            .is_error,
+            Some(true)
+        );
+        assert_eq!(
+            native
+                .launch_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        native
+            .move_noop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            call("restore_workspace_windows", json!({"session":"recover"}))
+                .await
+                .is_error,
+            Some(true)
         );
     }
 

@@ -273,7 +273,7 @@ fn is_chromium(name: &str, bundle_id: &str) -> bool {
     let value = format!("{name} {bundle_id}").to_ascii_lowercase();
     let products = [
         "chrome", "chromium", "electron", "brave", "edge", "vivaldi", "opera", "arc", "thorium",
-        "iridium", "yandex",
+        "iridium", "yandex", "helium",
     ];
     value
         .split(|ch: char| !ch.is_ascii_alphanumeric())
@@ -874,7 +874,8 @@ impl BrowserPlatform for MacOsBrowserPlatform {
                 | BrowserProduct::Vivaldi
                 | BrowserProduct::Opera
                 | BrowserProduct::Arc
-        ) {
+        ) || bundle_id.eq_ignore_ascii_case("net.imput.helium")
+        {
             BrowserProcessRole::StandaloneConsumer
         } else {
             BrowserProcessRole::Unknown
@@ -1668,6 +1669,7 @@ mod tests {
 
     #[test]
     fn browser_classifier_covers_embedded_and_standalone_chromium() {
+        assert!(is_chromium("Helium", "net.imput.helium"));
         assert!(is_chromium("Electron", "com.example.fixture"));
         assert!(is_chromium("Google Chrome", "com.google.Chrome"));
         assert!(!is_chromium("Safari", "com.apple.Safari"));

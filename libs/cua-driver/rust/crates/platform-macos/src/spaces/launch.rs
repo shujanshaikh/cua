@@ -1,7 +1,6 @@
 //! Workspace launch admission reuses the normal background app launcher.
 use cua_driver_core::{
     selected_windows::{WindowSelectionBackend, WindowTarget},
-    tool::Tool,
     workspace::{LaunchedWorkspaceWindow, WorkspaceApplication},
 };
 use serde_json::json;
@@ -27,7 +26,7 @@ pub(super) fn launch(recipe: &WorkspaceApplication) -> Result<LaunchedWorkspaceW
     let before: HashSet<_> = pids.into_iter().take(count as usize).collect();
     let frontmost = crate::apps::frontmost_pid();
     let result = tokio::runtime::Handle::current().block_on(
-        crate::tools::launch_app::LaunchAppTool.invoke(json!({
+        crate::tools::launch_app::LaunchAppTool.launch_workspace(json!({
             "bundle_id": recipe.bundle_id,
             "creates_new_application_instance": true,
             "additional_arguments": recipe.arguments,
@@ -35,7 +34,18 @@ pub(super) fn launch(recipe: &WorkspaceApplication) -> Result<LaunchedWorkspaceW
         })),
     );
     if result.is_error == Some(true) {
-        return Err("workspace_launch_failed: background launcher refused the configured app; no window access granted".into());
+        let reason = result
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                cua_driver_core::protocol::Content::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!(
+            "workspace_launch_failed: {reason}; no window access granted"
+        ));
     }
     let data = result
         .structured_content
@@ -63,10 +73,23 @@ pub(super) fn launch(recipe: &WorkspaceApplication) -> Result<LaunchedWorkspaceW
                 .into(),
         );
     }
-    let windows: Vec<_> = crate::windows::all_windows()
-        .into_iter()
-        .filter(|w| w.pid == pid)
-        .collect();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let windows = loop {
+        let windows: Vec<_> = crate::windows::all_windows()
+            .into_iter()
+            .filter(|w| w.pid == pid)
+            .collect();
+        if !windows.is_empty() || std::time::Instant::now() >= deadline {
+            break windows;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    if crate::apps::frontmost_pid() != frontmost || active_spaces()? != active_before {
+        return Err(format!("workspace_launch_background_failed: foreground changed while waiting for pid {pid}; no window access granted"));
+    }
+    if windows.is_empty() {
+        return Err(format!("workspace_launch_no_window: created pid {pid} did not expose a background window; the app may require activation, which this workspace will not perform"));
+    }
     // Document apps may also create an untitled window or an open panel.
     // Bind only the exact document the trusted recipe requested; those other
     // windows remain outside the selection, including keyboard delivery.

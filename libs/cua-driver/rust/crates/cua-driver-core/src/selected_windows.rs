@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -29,6 +29,7 @@ struct WorkspaceRestriction {
 
 pub struct SelectedWindows {
     workspace: OnceLock<WorkspaceRestriction>,
+    launched: Mutex<HashSet<WindowTarget>>,
     windows: Mutex<HashMap<WindowTarget, Option<Arc<dyn WindowIdentity>>>>,
 }
 
@@ -46,6 +47,7 @@ impl SelectedWindows {
         }
         Ok(Self {
             workspace: OnceLock::new(),
+            launched: Mutex::default(),
             windows: Mutex::new(windows),
         })
     }
@@ -91,7 +93,22 @@ impl SelectedWindows {
             return Err("workspace_launch_conflict: window identity was already used".into());
         }
         windows.insert(target, Some(identity));
+        self.launched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(target);
         Ok(())
+    }
+
+    /// Browser endpoint access may reuse trusted launch authority, but never
+    /// infer ownership from an arbitrary preselected personal window.
+    pub(crate) fn is_live_launched_window(&self, target: WindowTarget) -> bool {
+        let launched = self
+            .launched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&target);
+        launched && self.validate(target).is_ok()
     }
 
     pub(crate) fn set_workspace(&self, space: Option<u64>) {

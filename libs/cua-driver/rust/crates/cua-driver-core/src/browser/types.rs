@@ -175,6 +175,7 @@ pub enum EndpointTransport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EndpointAccessClass {
+    WorkspaceLaunched,
     DriverOwned,
     ExistingProfileApproved,
     EmbeddedApplication,
